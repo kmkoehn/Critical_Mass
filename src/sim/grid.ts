@@ -138,7 +138,7 @@ export class Grid {
 
   isFeederPowered(sub: SubstationId, feeder: number): boolean {
     const s = this.state.subs[sub];
-    return !this.state.dead && s.breakerClosed && s.lineUp && !s.feedersOff.includes(feeder);
+    return !this.state.dead && s.breakerClosed && !s.feedersOff.includes(feeder);
   }
 
   /**
@@ -163,7 +163,7 @@ export class Grid {
     for (const d of SUBSTATIONS) {
       const s = g.subs[d.id];
       s.demandMW = d.demand(hour, day, ambientTemp);
-      if (s.breakerClosed && s.lineUp) demand += s.demandMW;
+      if (s.breakerClosed) demand += s.demandMW;
     }
     g.demandMW = demand;
     g.dead = supplyMW <= 0.5;
@@ -184,8 +184,10 @@ export class Grid {
     let served = 0;
     for (const d of SUBSTATIONS) {
       const s = g.subs[d.id];
-      const connected = s.breakerClosed && s.lineUp;
-      const want = !connected ? d.feeders : shed > 0 ? Math.min(d.feeders, Math.ceil(shed * d.feeders - 1e-9)) : 0;
+      // A downed line reroutes through the rest of the network at half capacity.
+      const connected = s.breakerClosed;
+      let want = !connected ? d.feeders : shed > 0 ? Math.min(d.feeders, Math.ceil(shed * d.feeders - 1e-9)) : 0;
+      if (connected && !s.lineUp) want = Math.max(want, Math.ceil(d.feeders * 0.5));
       let count = s.feedersOff.length;
       if (want > count || g.dead || !connected) {
         count = want;

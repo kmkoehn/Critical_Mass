@@ -9,27 +9,40 @@ import { Reactor, averageRodInsertion, createReactorState, reactorStatus } from 
 import { Annunciator } from './sim/annunciator';
 import { TrendRecorder } from './sim/history';
 import { Grid, SUBSTATIONS } from './sim/grid';
-import { DEFAULT_ENV } from './sim/reactor';
 import { activeAlarms } from './sim/alarms';
+import { WEATHER_LABEL, Weather, createWeatherState, type WeatherKind } from './sim/weather';
+import {
+  FaultManager, REPAIR_SECONDS, faultAction, faultLocation, faultPoint, faultTitle, type Fault, type FaultKind,
+} from './sim/faults';
 import { Input } from './player/input';
 import { PlayerController } from './player/controller';
 import { Interactor } from './player/interaction';
+import { Vehicle } from './player/vehicle';
 import { World } from './world/world';
 import { DayNight } from './world/sky';
-import { BRIDGE, LOOKOUT, PLANT_LAYOUT, SPAWN, TOWN_SQUARE, zoneNameAt, type SubstationId } from './world/layout';
+import { TruckModel } from './world/truck';
+import { WeatherFx } from './world/weatherFx';
+import {
+  BRIDGE, FIELD_POINTS, LOOKOUT, PLANT_LAYOUT, REST_POINT, ROADS, SPAWN, TOWN_SQUARE, TRUCK_SPAWN, zoneNameAt,
+  type FieldPointId, type SubstationId,
+} from './world/layout';
 import type { PowerView } from './world/world';
 import type { PanelId } from './world/controlRoom';
+import { distToSegment } from './util/math';
 import { Hud, type Objective } from './ui/hud';
-import { BigMap, Minimap, renderMapImage, type MapMarker } from './ui/map';
+import { BigMap, Minimap, renderMapImage, type MapMarker, type MapPin } from './ui/map';
 import { reactorDebugText } from './ui/reactorDebug';
 import { PanelManager } from './ui/panels/panelManager';
-import { AlarmHorn } from './ui/audio';
+import { SoundFx } from './ui/audio';
 import {
   drawAnnunciator, drawCoolingScreen, drawGridScreen, drawPrimaryScreen, drawReactorScreen, drawTrendScreen, drawTurbineScreen,
 } from './ui/screens';
 
 const SIM_DT = 0.1;
 const WARPS = [1, 4, 16];
+/** Personal dose limit (mSv per day) before you're sent to rest. */
+const DOSE_LIMIT = 50;
+const REST_HOURS = 8;
 
 type Mode = 'paused' | 'play' | 'panel';
 
@@ -54,6 +67,24 @@ const PANEL_LABELS: Record<PanelId, string> = {
   trends: 'Trend Recorder',
 };
 
+const REPAIR_VERB: Record<FaultKind, string> = {
+  rcpBearing: 'Service bearing', feedValve: 'Free stuck valve', towerFan: 'Repair fans', intakeClog: 'Clear debris',
+  substationTrip: 'Reset breaker', lineDown: 'Inspect', radLeak: 'Reseal cask',
+};
+
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+
+function onAnyRoad(x: number, z: number): boolean {
+  for (const r of ROADS) {
+    for (let i = 0; i < r.points.length - 1; i++) {
+      const [ax, az] = r.points[i];
+      const [bx, bz] = r.points[i + 1];
+      if (distToSegment(x, z, ax, az, bx, bz) < r.width / 2 + 1) return true;
+    }
+  }
+  return false;
+}
+
 class Game {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -63,6 +94,8 @@ class Game {
   private readonly clock = new GameClock(8);
   private reactor = new Reactor(createReactorState('cold'));
   private readonly grid = new Grid();
+  private readonly weather = new Weather(createWeatherState(1234, 8 * 3600));
+  private readonly faults = new FaultManager();
   private readonly annunciator = new Annunciator();
   private readonly power: PowerView = {
     groupPowered: (group) => {
@@ -72,15 +105,18 @@ class Game {
     substation: (id) => {
       const g = this.grid.state;
       const s = g.subs[id];
-      if (!s.breakerClosed || !s.lineUp) return 'out';
+      if (!s.breakerClosed) return 'out';
       return g.dead ? 'dead' : 'on';
     },
   };
   private readonly trends = new TrendRecorder();
-  private readonly horn = new AlarmHorn();
+  private readonly sound = new SoundFx();
   private world!: World;
   private dayNight!: DayNight;
+  private weatherFx!: WeatherFx;
   private player!: PlayerController;
+  private vehicle!: Vehicle;
+  private truck!: TruckModel;
   private interactor!: Interactor;
   private panels!: PanelManager;
   private minimap!: Minimap;
@@ -89,6 +125,13 @@ class Game {
   private groupIndex = 0;
 
   private mode: Mode = 'paused';
+  private driving = false;
+  private chaseYaw = 0;
+  private readonly chaseCam = new THREE.Vector3();
+  private repair: null | { fault: Fault; point: FieldPointId; elapsed: number; duration: number } = null;
+  private doseMSv = 0;
+  private doseRate = 0;
+  private resting = 0;
   private started = false;
   /** Set by the debug API: keep running without pointer lock (automated browsers). */
   private noLock = false;
@@ -102,6 +145,7 @@ class Game {
   private cpuMs = 0;
   private screenTimer = 0;
   private realTime = 0;
+  private debugFaultIndex = 0;
   private readonly focus = new THREE.Vector3();
 
   constructor(app: HTMLElement) {
@@ -121,7 +165,7 @@ class Game {
     this.hud = new Hud(app);
     this.input = new Input(this.renderer.domElement);
     this.hud.onStart = () => {
-      this.horn.unlock();
+      this.sound.unlock();
       this.input.requestLock();
     };
     this.input.onLockChange = (locked) => this.onLockChange(locked);
@@ -139,12 +183,16 @@ class Game {
     const t0 = performance.now();
     this.world = new World(this.scene);
     this.dayNight = new DayNight(this.scene);
+    this.weatherFx = new WeatherFx(this.scene);
     this.player = new PlayerController(this.world.hf, this.world.collision);
     this.player.spawn(SPAWN.x, SPAWN.z, SPAWN.yaw);
-    this.interactor = new Interactor(this.world.controlRoom.interactables);
+    this.vehicle = new Vehicle(this.world.hf, this.world.collision, onAnyRoad, TRUCK_SPAWN.x, TRUCK_SPAWN.z, TRUCK_SPAWN.yaw);
+    this.truck = new TruckModel(this.scene);
+    this.interactor = new Interactor(this.world.interactables);
     this.panels = new PanelManager(this.hud.root, {
       reactor: () => this.reactor,
       grid: () => this.grid,
+      faults: () => this.faults,
       annunciator: this.annunciator,
       trends: this.trends,
       gameSeconds: () => this.clock.seconds,
@@ -208,8 +256,33 @@ class Game {
     }, 400);
   }
 
+  private enterTruck(): void {
+    this.driving = true;
+    this.chaseYaw = 0;
+    this.chaseCam.set(this.vehicle.x, this.vehicle.y + 4, this.vehicle.z);
+    this.repair = null;
+    this.hud.setDriving(true);
+  }
+
+  private exitTruck(): void {
+    const at = this.vehicle.exitPoint();
+    if (!at) {
+      this.hud.toast('No room to get out here', 'warn');
+      return;
+    }
+    if (Math.abs(this.vehicle.speed) > 2) {
+      this.hud.toast('Stop the truck first', 'warn');
+      return;
+    }
+    this.vehicle.speed = 0;
+    this.driving = false;
+    this.player.noclip = false;
+    this.player.spawn(at.x, at.z, this.vehicle.yaw, this.vehicle.y + 1);
+    this.hud.setDriving(false);
+  }
+
   private activeAlarmIds(): string[] {
-    return [...this.reactor.state.alarms, ...this.grid.state.alarms];
+    return [...this.reactor.state.alarms, ...this.grid.state.alarms, ...this.faults.alarms];
   }
 
   private gridSummary(): { text: string; tone: 'ok' | 'warn' | 'bad' | 'dim' } {
@@ -225,6 +298,76 @@ class Game {
     const c = PLANT_LAYOUT.controlRoom;
     const p = this.player.pos;
     return Math.abs(p.x - c.cx) < c.w / 2 && Math.abs(p.z - c.cz) < c.d / 2 && p.y < this.world.controlRoom.floorY + 3;
+  }
+
+  // ------------------------------------------------------------------ simulation
+
+  /** One fixed simulation step of every system, in dependency order. */
+  private simStep(strikes: Array<{ x: number; z: number }>): void {
+    const dtGame = SIM_DT * this.clock.scale;
+    this.clock.step(SIM_DT);
+    const t = this.clock.seconds;
+    const ws = this.weather.step(t, dtGame);
+    if (ws.changed) this.hud.toast(`Weather: ${WEATHER_LABEL[ws.changed].toLowerCase()} moving in`, ws.changed === 'thunderstorm' ? 'warn' : 'info');
+    const w = this.weather.state;
+    this.reactor.env = { ambientTemp: w.ambientTemp, riverTemp: w.riverTemp };
+    const fr = this.faults.step(t, dtGame, w.kind, ws.strikes, this.reactor);
+    for (const e of fr.events) this.hud.toast(e.text, e.kind);
+    for (const s of fr.strikes) strikes.push(s);
+    this.faults.apply(this.reactor, this.grid);
+    this.reactor.gridHz = this.grid.state.dead ? 60 : this.grid.state.frequency;
+    this.reactor.step(SIM_DT, dtGame);
+    const rs = this.reactor.state;
+    const res = this.grid.step(SIM_DT, t, dtGame, rs.generatorSynced ? rs.electricalOutputMW : 0, w.ambientTemp);
+    for (const e of res.events) this.hud.toast(e.text, e.kind);
+    if (res.generatorTrip) this.reactor.generatorTrip(res.generatorTrip);
+    this.annunciator.update(this.activeAlarmIds());
+    this.trends.record(t, rs, this.grid.state.demandMW);
+    // Personal dose accumulates on the game clock.
+    this.doseMSv += (this.doseRate * dtGame) / 3600 / 1000;
+  }
+
+  /** Run the simulation forward quickly (resting, debug). */
+  private fastForward(gameSeconds: number): void {
+    const steps = Math.round(gameSeconds / (SIM_DT * this.clock.scale));
+    const sink: Array<{ x: number; z: number }> = [];
+    for (let i = 0; i < steps; i++) this.simStep(sink);
+    this.reactor.drainEvents();
+  }
+
+  /** Dose rate at the player's position, µSv/h. */
+  private computeDoseRate(): number {
+    const R = this.reactor.state.radiationLevels;
+    const p = this.player.pos;
+    let rate = R.site;
+    const sf = PLANT_LAYOUT.spentFuel;
+    const dPad = Math.hypot(p.x - sf.cx, p.z - sf.cz);
+    rate += R.spentFuelPad / (1 + (dPad / 8) ** 2);
+    const c = PLANT_LAYOUT.containment;
+    const dC = Math.hypot(p.x - c.x, p.z - c.z);
+    rate += (R.containment * 0.01) / (1 + (dC / 25) ** 2);
+    const th = PLANT_LAYOUT.turbineHall;
+    if (Math.abs(p.x - th.cx) < th.w / 2 && Math.abs(p.z - th.cz) < th.d / 2) rate += R.turbineHall;
+    return rate;
+  }
+
+  private startRest(): void {
+    this.resting = 2.5;
+    this.repair = null;
+    if (this.driving) {
+      this.driving = false;
+      this.hud.setDriving(false);
+    }
+    this.hud.setFade(`Dose limit reached (${DOSE_LIMIT} mSv). Health physics sends you off site to rest…`);
+  }
+
+  private finishRest(): void {
+    this.fastForward(REST_HOURS * 3600);
+    this.doseMSv = 0;
+    this.player.noclip = false;
+    this.player.spawn(REST_POINT.x, REST_POINT.z, REST_POINT.yaw);
+    this.hud.setFade(null);
+    this.hud.toast(`You rested for ${REST_HOURS} hours. Dose counter reset.`, 'info');
   }
 
   // ------------------------------------------------------------------ objectives
@@ -311,48 +454,61 @@ class Game {
     this.last = now;
     this.realTime += dt;
     const inp = this.input;
-    const running = this.mode !== 'paused';
+    const running = this.mode !== 'paused' && this.resting <= 0;
     let ePressed = inp.wasPressed('KeyE');
+    const strikes: Array<{ x: number; z: number }> = [];
+
+    if (this.resting > 0 && this.mode !== 'paused') {
+      this.resting -= dt;
+      if (this.resting <= 0) this.finishRest();
+    }
 
     if (running) {
       // Fixed-step simulation.
-      const warp = WARPS[this.warp];
-      this.acc += dt * warp;
+      this.acc += dt * WARPS[this.warp];
       let steps = 0;
       while (this.acc >= SIM_DT && steps < 400) {
-        const dtGame = SIM_DT * this.clock.scale;
-        this.clock.step(SIM_DT);
-        this.reactor.step(SIM_DT, dtGame);
-        const rs = this.reactor.state;
-        const res = this.grid.step(SIM_DT, this.clock.seconds, dtGame,
-          rs.generatorSynced ? rs.electricalOutputMW : 0, DEFAULT_ENV.ambientTemp);
-        for (const e of res.events) this.hud.toast(e.text, e.kind);
-        if (res.generatorTrip) this.reactor.generatorTrip(res.generatorTrip);
-        this.annunciator.update(this.activeAlarmIds());
-        this.trends.record(this.clock.seconds, rs, this.grid.state.demandMW);
+        this.simStep(strikes);
         this.acc -= SIM_DT;
         steps++;
       }
       for (const e of this.reactor.drainEvents()) this.hud.toast(e.text, e.kind);
+      if (this.doseMSv >= DOSE_LIMIT) this.startRest();
 
       if (inp.wasPressed('Backquote')) this.debugVisible = !this.debugVisible;
       if (this.debugVisible) this.debugKeys();
     }
 
-    if (this.mode === 'play') {
+    const [mdx, mdy] = inp.consumeMouse();
+    if (this.mode === 'play' && this.resting <= 0) {
       if (inp.wasPressed('KeyM')) this.bigMap.toggle();
-      const [mdx, mdy] = inp.consumeMouse();
-      this.player.update(dt, {
-        forward: (inp.isDown('KeyW') || inp.isDown('ArrowUp') ? 1 : 0) - (inp.isDown('KeyS') || inp.isDown('ArrowDown') ? 1 : 0),
-        strafe: (inp.isDown('KeyD') || inp.isDown('ArrowRight') ? 1 : 0) - (inp.isDown('KeyA') || inp.isDown('ArrowLeft') ? 1 : 0),
-        jump: inp.isDown('Space'),
-        sprint: inp.isDown('ShiftLeft') || inp.isDown('ShiftRight'),
-        crouch: inp.isDown('KeyC') || inp.isDown('ControlLeft'),
-        lookDX: mdx,
-        lookDY: mdy,
-      });
+      if (this.driving) {
+        this.vehicle.update(dt, {
+          throttle: (inp.isDown('KeyW') || inp.isDown('ArrowUp') ? 1 : 0) - (inp.isDown('KeyS') || inp.isDown('ArrowDown') ? 1 : 0),
+          steer: (inp.isDown('KeyD') || inp.isDown('ArrowRight') ? 1 : 0) - (inp.isDown('KeyA') || inp.isDown('ArrowLeft') ? 1 : 0),
+          handbrake: inp.isDown('Space'),
+        });
+        // The player rides along (for zones, dose, objectives and the minimap).
+        Object.assign(this.player.pos, { x: this.vehicle.x, y: this.vehicle.y, z: this.vehicle.z });
+        this.player.yaw = this.vehicle.yaw;
+        this.chaseYaw -= mdx * 0.004;
+        if (mdx === 0) this.chaseYaw *= 1 - Math.min(1, dt * 1.5);
+        if (ePressed) {
+          this.exitTruck();
+          ePressed = false;
+        }
+      } else {
+        this.player.update(dt, {
+          forward: (inp.isDown('KeyW') || inp.isDown('ArrowUp') ? 1 : 0) - (inp.isDown('KeyS') || inp.isDown('ArrowDown') ? 1 : 0),
+          strafe: (inp.isDown('KeyD') || inp.isDown('ArrowRight') ? 1 : 0) - (inp.isDown('KeyA') || inp.isDown('ArrowLeft') ? 1 : 0),
+          jump: inp.isDown('Space'),
+          sprint: inp.isDown('ShiftLeft') || inp.isDown('ShiftRight'),
+          crouch: inp.isDown('KeyC') || inp.isDown('ControlLeft'),
+          lookDX: mdx,
+          lookDY: mdy,
+        });
+      }
     } else if (this.mode === 'panel') {
-      inp.consumeMouse();
       if (inp.wasPressed('Escape') || inp.wasPressed('KeyE')) {
         this.panels.close();
         ePressed = false; // don't reopen with the same key press
@@ -360,26 +516,62 @@ class Game {
     }
     if (running) this.checkObjectives();
 
+    // Camera: first person on foot, chase camera in the truck.
     const p = this.player.pos;
-    this.camera.position.set(p.x, this.player.eyeY, p.z);
-    this.camera.rotation.set(this.player.pitch, this.player.yaw, 0);
+    if (this.driving) {
+      const v = this.vehicle;
+      const yaw = v.yaw + this.chaseYaw;
+      const want = new THREE.Vector3(v.x + Math.sin(yaw) * 9.5, v.y + 4.2, v.z + Math.cos(yaw) * 9.5);
+      want.y = Math.max(want.y, this.world.hf.heightAt(want.x, want.z) + 1.5);
+      this.chaseCam.lerp(want, 1 - Math.exp(-6 * dt));
+      this.camera.position.copy(this.chaseCam);
+      this.camera.lookAt(v.x, v.y + 1.8, v.z);
+    } else {
+      this.camera.position.set(p.x, this.player.eyeY, p.z);
+      this.camera.rotation.set(this.player.pitch, this.player.yaw, 0);
+    }
     this.camera.updateMatrixWorld();
 
-    // Interaction.
-    const target = this.mode === 'play' ? this.interactor.update(this.camera, this.insideControlRoom) : null;
-    this.hud.setPrompt(target ? `[E]  ${target.label}` : null);
-    if (target && ePressed) this.openPanel(target.panelId);
+    this.updateInteraction(dt, ePressed);
     inp.endFrame();
 
     this.focus.set(p.x, p.y, p.z);
+    const w = this.weather.state;
+    this.dayNight.cloud = w.cloud;
+    this.dayNight.flash = this.weatherFx.flash;
     this.dayNight.update(this.clock.hour, this.focus);
+    for (const s of strikes.slice(-3)) {
+      const gy = this.world.hf.heightAt(s.x, s.z);
+      this.weatherFx.strike(s.x, gy, s.z);
+      const dist = Math.hypot(s.x - p.x, s.z - p.z);
+      this.sound.thunder(Math.min(4, dist / 340), Math.max(0.15, 1 - dist / 1500));
+    }
+    this.weatherFx.update(dt, this.camera, w.rain);
     const rs = this.reactor.state;
     const towerLoad = Math.min(1, rs.condenserLoadMW / 2000);
-    this.world.update(dt, this.dayNight.daylight, this.dayNight.night, towerLoad, this.power);
+    const faultPoints = new Set<FieldPointId>();
+    for (const f of this.faults.state.faults) {
+      const fp = faultPoint(f);
+      if (fp) faultPoints.add(fp);
+    }
+    this.world.update(dt, this.dayNight.daylight, this.dayNight.night, towerLoad, this.power,
+      { points: faultPoints, intakeClog: rs.plantFaults.intakeClog });
+    this.truck.update(this.vehicle, dt, this.dayNight.night, this.driving);
     this.updateScreens(dt);
     this.panels.update(dt);
-    const severe = activeAlarms(rs).some((a) => a.severity === 'trip');
-    this.horn.update(dt, running && this.annunciator.hornOn, severe);
+
+    // Sound.
+    this.doseRate = this.computeDoseRate();
+    const rcp = FIELD_POINTS.rcp;
+    const hottest = Math.max(...rs.coolantPumps.map((pp) => (pp.speed > 0.1 ? pp.bearingTemp : 0)));
+    const near = 1 / (1 + (Math.hypot(p.x - rcp.x, p.z - rcp.z) / 15) ** 2);
+    this.sound.update(dt, {
+      horn: running && this.annunciator.hornOn && (this.insideControlRoom || this.mode === 'panel'),
+      severe: activeAlarms(rs).some((a) => a.severity === 'trip'),
+      rain: running ? w.rain : 0,
+      whine: running ? Math.max(0, Math.min(1, (hottest - 80) / 40)) * near : 0,
+      whinePitch: Math.max(0, Math.min(1, (hottest - 70) / 50)),
+    });
 
     this.renderer.render(this.scene, this.camera);
 
@@ -395,32 +587,121 @@ class Game {
     const warp = WARPS[this.warp];
     this.hud.update({
       time: this.clock.format() + (warp > 1 ? `  ×${warp}` : ''),
-      weather: 'Clear', zone, fps: this.fps, reactor: reactorStatus(rs), grid: this.gridSummary(),
+      weather: `${WEATHER_LABEL[w.kind]} ${w.ambientTemp.toFixed(0)}°C`,
+      zone, fps: this.fps, reactor: reactorStatus(rs), grid: this.gridSummary(),
     });
-    this.minimap.draw(p.x, p.z, this.player.yaw);
+    this.hud.setSpeed(this.driving ? this.vehicle.speed * 3.6 : null);
+    this.hud.setDosimeter(this.doseRate, this.doseMSv, DOSE_LIMIT);
+    this.hud.setWorkOrders(this.faults.state.faults.slice(0, 5).map((f) => {
+      const loc = faultLocation(f);
+      const dx = loc.x - p.x;
+      const dz = loc.z - p.z;
+      const dir = COMPASS[Math.round(((Math.atan2(dx, -dz) / (Math.PI * 2)) * 8 + 8)) % 8];
+      const dist = Math.hypot(dx, dz);
+      return {
+        title: faultTitle(f), action: faultAction(f), where: dist < 30 ? 'here' : `${Math.round(dist / 10) * 10} m ${dir}`,
+        tone: f.kind === 'radLeak' || f.kind === 'lineDown' || f.kind === 'substationTrip' ? 'bad' : 'warn',
+      };
+    }));
+
+    const pins: MapPin[] = this.faults.state.faults.map((f) => ({
+      ...faultLocation(f), color: '#ff5a3a', shape: 'diamond', label: faultTitle(f),
+    }));
+    if (!this.driving) pins.push({ x: this.vehicle.x, z: this.vehicle.z, color: '#5ab0ff', shape: 'square', label: 'Truck' });
+    this.minimap.draw(p.x, p.z, this.player.yaw, pins);
     const g = this.groups[this.groupIndex];
     const markers: MapMarker[] = g.items.map((o) => ({ x: o.x, z: o.z, label: o.text, done: o.done }));
     const town = SUBSTATIONS.find((d) => d.id === 'town')!;
     const darkDistricts = Array.from({ length: town.feeders }, (_, i) => i).filter((i) => !this.grid.isFeederPowered('town', i));
-    this.bigMap.draw(p.x, p.z, this.player.yaw, markers, { darkDistricts, substation: this.power.substation });
+    this.bigMap.draw(p.x, p.z, this.player.yaw, markers, { darkDistricts, substation: this.power.substation }, pins);
     this.cpuMs = this.cpuMs * 0.9 + (performance.now() - t0) * 0.1;
     if (this.debugVisible) {
       const info = this.renderer.info.render;
       const s = this.world.stats;
       this.hud.setDebug(true, [
         `fps        ${this.fps.toFixed(0)}   cpu ${this.cpuMs.toFixed(1)} ms   sim ×${warp}`,
-        `pos        ${p.x.toFixed(1)}, ${p.y.toFixed(2)}, ${p.z.toFixed(1)}`,
+        `pos        ${p.x.toFixed(1)}, ${p.y.toFixed(2)}, ${p.z.toFixed(1)}${this.driving ? `   truck ${(this.vehicle.speed * 3.6).toFixed(0)} km/h` : ''}`,
         `ground     ${this.player.onGround ? 'yes' : 'no'}${this.player.swimming ? '  (swimming)' : ''}${this.player.noclip ? '  NOCLIP' : ''}`,
         `zone       ${zone}`,
         `draws      ${info.calls}   tris ${(info.triangles / 1000).toFixed(0)}k`,
-        `world      ${s.buildings} town bldgs, ${s.trees} trees, ${s.colliders} colliders`,
-        'N noclip   T +1 hour   = sim speed ×1/×4/×16',
+        `world      ${s.buildings} town bldgs, ${s.trees} trees, ${s.towers} towers, ${s.colliders} colliders`,
+        `weather    ${w.kind}  ${w.ambientTemp.toFixed(1)}°C  river ${w.riverTemp.toFixed(1)}°C  cloud ${w.cloud.toFixed(2)} rain ${w.rain.toFixed(2)}`,
+        'N noclip   T +1 hour   = sim speed   O next weather   U inject fault',
         '',
         reactorDebugText(rs),
       ].join('\n'));
     } else {
       this.hud.setDebug(false);
     }
+  }
+
+  /** Crosshair prompts, panels, field repairs and the truck. */
+  private updateInteraction(dt: number, ePressed: boolean): void {
+    if (this.mode !== 'play' || this.resting > 0) {
+      this.hud.setPrompt(null);
+      this.hud.setProgress(null);
+      return;
+    }
+    if (this.driving) {
+      this.hud.setPrompt(Math.abs(this.vehicle.speed) < 2 ? '[E]  Get out' : null);
+      this.hud.setProgress(null);
+      return;
+    }
+    const target = this.interactor.update(this.camera, (i) => (i.kind === 'panel' ? this.insideControlRoom : true));
+
+    // A repair in progress continues while you keep looking at the equipment.
+    if (this.repair) {
+      const still = target?.kind === 'field' && target.point === this.repair.point;
+      if (!still) {
+        this.hud.toast('Repair interrupted', 'warn');
+        this.repair = null;
+      } else {
+        this.repair.elapsed += dt;
+        const r = this.repair;
+        this.hud.setProgress(`${REPAIR_VERB[r.fault.kind]}…`, r.elapsed / r.duration);
+        this.hud.setPrompt(null);
+        if (r.elapsed >= r.duration) {
+          const err = this.faults.repair(r.fault.id, this.clock.seconds, this.reactor);
+          if (err) this.hud.toast(err, 'warn');
+          for (const e of this.faults.state.log.slice(-1)) if (!err) this.hud.toast(e.text, 'good');
+          this.repair = null;
+          this.hud.setProgress(null);
+        }
+        return;
+      }
+    }
+    this.hud.setProgress(null);
+
+    if (target?.kind === 'panel') {
+      this.hud.setPrompt(`[E]  ${target.label}`);
+      if (ePressed) this.openPanel(target.panelId);
+      return;
+    }
+    if (target?.kind === 'field') {
+      const f = this.faults.faultsAt(target.point)[0];
+      const name = FIELD_POINTS[target.point].name;
+      if (!f) {
+        this.hud.setPrompt(`${name} — normal`);
+        return;
+      }
+      this.hud.setPrompt(`[E]  ${REPAIR_VERB[f.kind]}: ${faultTitle(f)}`);
+      if (ePressed) {
+        if (f.kind === 'rcpBearing') {
+          const pump = this.reactor.state.coolantPumps[Number(f.target)];
+          if (pump.on || pump.speed > 0.05) {
+            this.hud.toast(`Stop RCP ${Number(f.target) + 1} from the control room first`, 'warn');
+            return;
+          }
+        }
+        this.repair = { fault: f, point: target.point, elapsed: 0, duration: REPAIR_SECONDS[f.kind] };
+      }
+      return;
+    }
+    // The truck.
+    const v = this.vehicle;
+    const near = Math.hypot(v.x - this.player.pos.x, v.z - this.player.pos.z) < 4.2;
+    this.hud.setPrompt(near ? '[E]  Drive utility truck' : null);
+    if (near && ePressed) this.enterTruck();
   }
 
   /** Redraw the in-world control-room screens a few times a second, when anyone could see them. */
@@ -456,6 +737,20 @@ class Game {
     if (inp.wasPressed('Equal')) {
       this.warp = (this.warp + 1) % WARPS.length;
       this.hud.toast(`Debug: simulation speed ×${WARPS[this.warp]}`, 'warn');
+    }
+    if (inp.wasPressed('KeyO')) {
+      const kinds: WeatherKind[] = ['clear', 'cloudy', 'rain', 'thunderstorm', 'heatwave', 'coldsnap'];
+      const next = kinds[(kinds.indexOf(this.weather.state.kind) + 1) % kinds.length];
+      this.weather.force(next, this.clock.seconds);
+      this.hud.toast(`Debug: weather → ${WEATHER_LABEL[next]}`, 'warn');
+    }
+    if (inp.wasPressed('KeyU')) {
+      const list: Array<[FaultKind, string]> = [
+        ['substationTrip', 'town'], ['intakeClog', 'intake'], ['rcpBearing', '1'], ['feedValve', 'fw3b'],
+        ['towerFan', '0'], ['radLeak', 'pad'], ['lineDown', 'industrial'],
+      ];
+      const [kind, target] = list[this.debugFaultIndex++ % list.length];
+      this.faults.inject(kind, target, this.clock.seconds);
     }
     const big = inp.isDown('ShiftLeft') || inp.isDown('ShiftRight');
     if (inp.wasPressed('BracketLeft')) r.nudgeRods(big ? 5 : 1);
@@ -516,14 +811,26 @@ class Game {
         g.warp = Math.max(0, WARPS.indexOf(n));
       },
       setHour: (h: number) => g.clock.setHour(h),
+      fastForward: (hours: number) => g.fastForward(hours * 3600),
       toggleMap: () => g.bigMap.toggle(),
       reactor: () => g.reactor,
+      setWeather: (kind: WeatherKind) => g.weather.force(kind, g.clock.seconds),
+      weather: () => ({ ...g.weather.state }),
+      injectFault: (kind: FaultKind, target: string) => g.faults.inject(kind, target, g.clock.seconds),
+      faults: () => g.faults.state.faults.map((f) => `${faultTitle(f)} [${f.progress.toFixed(2)}]`),
+      log: () => g.faults.state.log.slice(-10).map((e) => e.text),
+      truck: () => ({
+        x: +g.vehicle.x.toFixed(1), z: +g.vehicle.z.toFixed(1), y: +g.vehicle.y.toFixed(2),
+        yaw: +g.vehicle.yaw.toFixed(3), kmh: Math.round(g.vehicle.speed * 3.6), driving: g.driving, road: g.vehicle.onRoadNow,
+      }),
+      dose: () => ({ rate: Math.round(g.doseRate), mSv: +g.doseMSv.toFixed(2) }),
       grid: () => {
         const s = g.grid.state;
         return {
           dead: s.dead, hz: +s.frequency.toFixed(2), supply: Math.round(s.supplyMW), demand: Math.round(s.demandMW),
           served: Math.round(s.servedMW), shed: +s.shedFraction.toFixed(3), alarms: s.alarms,
-          townOff: s.subs.town.feedersOff, subs: Object.fromEntries(Object.entries(s.subs).map(([k, v]) => [k, `${v.servedMW.toFixed(0)}/${v.demandMW.toFixed(0)} off:${v.feedersOff.length}`])),
+          townOff: s.subs.town.feedersOff,
+          subs: Object.fromEntries(Object.entries(s.subs).map(([k, v]) => [k, `${v.breakerClosed ? '' : 'OPEN '}${v.servedMW.toFixed(0)}/${v.demandMW.toFixed(0)} off:${v.feedersOff.length}`])),
         };
       },
       loadPlant: (preset: 'cold' | 'fullPower') => g.loadPlant(preset),
@@ -538,8 +845,10 @@ class Game {
       },
       state: () => ({
         mode: g.mode,
+        driving: g.driving,
         panel: g.panels.current,
-        prompt: g.interactor.current?.label ?? null,
+        prompt: g.interactor.current ? (g.interactor.current.kind === 'panel' ? g.interactor.current.label : g.interactor.current.point) : null,
+        repairing: g.repair ? `${g.repair.point} ${(g.repair.elapsed / g.repair.duration * 100).toFixed(0)}%` : null,
         pos: { ...g.player.pos },
         onGround: g.player.onGround,
         swimming: g.player.swimming,

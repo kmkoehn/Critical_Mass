@@ -1,8 +1,15 @@
-/** Minimal Web Audio alarm horn (the full audio pass is Milestone 8). */
-export class AlarmHorn {
+/**
+ * Minimal Web Audio: alarm horn, rain, thunder and a bearing whine.
+ * (The full audio pass is Milestone 8.)
+ */
+export class SoundFx {
   private ctx: AudioContext | null = null;
-  private gain: GainNode | null = null;
-  private on = false;
+  private horn: GainNode | null = null;
+  private rainGain: GainNode | null = null;
+  private whineGain: GainNode | null = null;
+  private whineOsc: OscillatorNode | null = null;
+  private noise: AudioBuffer | null = null;
+  private hornOn = false;
   private t = 0;
 
   /** Must be called from a user gesture (browsers block audio until then). */
@@ -12,32 +19,85 @@ export class AlarmHorn {
       return;
     }
     try {
-      this.ctx = new AudioContext();
-      const osc = this.ctx.createOscillator();
+      const ctx = new AudioContext();
+      this.ctx = ctx;
+      // Horn: filtered square wave, gated by update().
+      const osc = ctx.createOscillator();
       osc.type = 'square';
       osc.frequency.value = 880;
-      this.gain = this.ctx.createGain();
-      this.gain.gain.value = 0;
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.value = 2200;
-      osc.connect(filter).connect(this.gain).connect(this.ctx.destination);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 2200;
+      this.horn = ctx.createGain();
+      this.horn.gain.value = 0;
+      osc.connect(lp).connect(this.horn).connect(ctx.destination);
       osc.start();
+      // White-noise buffer shared by rain and thunder.
+      const len = ctx.sampleRate * 2;
+      this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = this.noise.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      const rain = ctx.createBufferSource();
+      rain.buffer = this.noise;
+      rain.loop = true;
+      const rainFilter = ctx.createBiquadFilter();
+      rainFilter.type = 'bandpass';
+      rainFilter.frequency.value = 2500;
+      rainFilter.Q.value = 0.4;
+      this.rainGain = ctx.createGain();
+      this.rainGain.gain.value = 0;
+      rain.connect(rainFilter).connect(this.rainGain).connect(ctx.destination);
+      rain.start();
+      // Bearing whine: a thin sine that rises in pitch with temperature.
+      this.whineOsc = ctx.createOscillator();
+      this.whineOsc.type = 'sawtooth';
+      this.whineOsc.frequency.value = 1400;
+      const whineFilter = ctx.createBiquadFilter();
+      whineFilter.type = 'bandpass';
+      whineFilter.frequency.value = 1600;
+      whineFilter.Q.value = 6;
+      this.whineGain = ctx.createGain();
+      this.whineGain.gain.value = 0;
+      this.whineOsc.connect(whineFilter).connect(this.whineGain).connect(ctx.destination);
+      this.whineOsc.start();
     } catch {
       this.ctx = null;
     }
   }
 
-  /** Call every frame. `severe` picks the faster, higher pattern used for trips. */
-  update(dt: number, sounding: boolean, severe: boolean): void {
-    if (!this.ctx || !this.gain) return;
+  /** Call every frame. */
+  update(dt: number, o: { horn: boolean; severe: boolean; rain: number; whine: number; whinePitch: number }): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.horn || !this.rainGain || !this.whineGain || !this.whineOsc) return;
     this.t += dt;
-    const period = severe ? 0.5 : 1.0;
-    const beep = sounding && this.t % period < period * 0.45;
-    if (beep !== this.on) {
-      this.on = beep;
-      const now = this.ctx.currentTime;
-      this.gain.gain.setTargetAtTime(beep ? 0.05 : 0, now, 0.01);
+    const now = ctx.currentTime;
+    const period = o.severe ? 0.5 : 1.0;
+    const beep = o.horn && this.t % period < period * 0.45;
+    if (beep !== this.hornOn) {
+      this.hornOn = beep;
+      this.horn.gain.setTargetAtTime(beep ? 0.05 : 0, now, 0.01);
     }
+    this.rainGain.gain.setTargetAtTime(o.rain * 0.12, now, 0.3);
+    this.whineGain.gain.setTargetAtTime(o.whine * 0.04, now, 0.2);
+    this.whineOsc.frequency.setTargetAtTime(1200 + 900 * o.whinePitch, now, 0.5);
+  }
+
+  /** A thunderclap after `delay` seconds (sound travels ~340 m/s). */
+  thunder(delay: number, volume: number): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.noise) return;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 180 + 400 * volume;
+    const g = ctx.createGain();
+    const t0 = ctx.currentTime + delay;
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(0.5 * volume, t0 + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 2.5);
+    src.connect(lp).connect(g).connect(ctx.destination);
+    src.start(t0);
+    src.stop(t0 + 2.6);
   }
 }

@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import type { CollisionWorld } from './collision';
 import type { Heightfield } from './heightfield';
 import type { Materials } from './materials';
+import type { FieldPointId } from './layout';
 
 export type MapFeature =
   | { kind: 'rect'; minX: number; minZ: number; maxX: number; maxZ: number; color: string }
@@ -54,6 +55,19 @@ function gableGeometry(w: number, d: number, rise: number): THREE.BufferGeometry
 
 export class WorldBuilder {
   readonly features: MapFeature[] = [];
+  /** Meshes of repairable field equipment (raycast targets). */
+  readonly fieldMeshes: THREE.Object3D[] = [];
+  /** Amber beacon on each piece of field equipment; flashes while it has a fault. */
+  readonly fieldBeacons = new Map<FieldPointId, THREE.MeshStandardMaterial>();
+
+  /** Put a small fault beacon at a position. */
+  beacon(point: FieldPointId, x: number, y: number, z: number): void {
+    const mat = new THREE.MeshStandardMaterial({ color: 0x3a2a10, emissive: 0xffa020, emissiveIntensity: 0 });
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 8), mat);
+    m.position.set(x, y, z);
+    this.root.add(m);
+    this.fieldBeacons.set(point, mat);
+  }
   /** Lit window materials per light group (e.g. "town:3"), so feeders can go dark independently. */
   readonly lightGroups = new Map<string, THREE.MeshStandardMaterial[]>();
   private lightGroup: string | null = null;
@@ -68,6 +82,30 @@ export class WorldBuilder {
 
   groundY(x: number, z: number): number {
     return this.hf.heightAt(x, z);
+  }
+
+  /** Mark an object as a piece of repairable field equipment. */
+  fieldPoint(point: FieldPointId, obj: THREE.Object3D): void {
+    obj.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) {
+        o.userData.interact = { kind: 'field', point };
+        this.fieldMeshes.push(o);
+      }
+    });
+  }
+
+  /**
+   * A small equipment cabinet standing on the ground, registered as a field point.
+   * `facing` is the yaw of its front (which way someone using it looks, reversed).
+   */
+  cabinet(point: FieldPointId, x: number, z: number, w = 1.2, h = 1.9, d = 0.6, baseY?: number): THREE.Mesh {
+    const y = baseY ?? this.groundY(x, z);
+    const mesh = this.box(x - w / 2, y - 0.2, z - d / 2, x + w / 2, y + h, z + d / 2,
+      [this.mats.metal, this.mats.metal, this.mats.metalDark, this.mats.metalDark, this.mats.safetyYellow, this.mats.safetyYellow],
+      { map: false });
+    this.fieldPoint(point, mesh);
+    this.beacon(point, x, y + h + 0.2, z);
+    return mesh;
   }
 
   /** Buildings placed after this call get their own copies of lit window materials. null = always lit. */

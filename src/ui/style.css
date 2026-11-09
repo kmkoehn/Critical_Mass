@@ -67,18 +67,46 @@ html, body {
   padding: 6px 12px; font-size: 14px; letter-spacing: 0.04em; white-space: nowrap;
 }
 .interact-prompt[hidden] { display: none; }
-.hud.panel-open .crosshair, .hud.panel-open .interact-prompt, .hud.panel-open .objectives { display: none; }
+.hud.panel-open .crosshair, .hud.panel-open .interact-prompt, .hud.panel-open .right-stack { display: none; }
+.hud.driving .crosshair { display: none; }
 
 /* ---------- minimap */
 .minimap { position: absolute; left: 16px; bottom: 16px; }
 .minimap canvas { display: block; border-radius: 50%; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45); }
 .minimap-hint { text-align: center; margin-top: 6px; font-size: 11px; color: var(--ink-dim); letter-spacing: 0.1em; }
 
-/* ---------- objectives */
-.objectives {
-  position: absolute; right: 16px; bottom: 16px; width: 300px;
+/* ---------- objectives & work orders */
+.right-stack { position: absolute; right: 16px; bottom: 16px; width: 310px; display: flex; flex-direction: column; gap: 8px; }
+.objectives, .work-orders {
   background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 8px; padding: 12px 14px;
   font-size: 14px; line-height: 1.35;
+}
+.work-orders[hidden] { display: none; }
+.work-orders .obj-title { color: #ff9a5a; }
+.wo { padding: 4px 0 4px 9px; border-left: 3px solid #ffb020; margin-bottom: 6px; }
+.wo.bad { border-left-color: #ff4a36; }
+.wo-title { font-weight: 600; }
+.wo-meta { font-size: 12px; color: var(--ink-dim); }
+
+/* ---------- dosimeter, speedometer, progress, fade */
+.dosimeter {
+  position: absolute; left: 16px; bottom: 236px; padding: 6px 10px; border-radius: 6px; font-size: 13px;
+  background: var(--panel); border: 1px solid var(--panel-edge); font-variant-numeric: tabular-nums; color: #b8f0c4;
+}
+.dosimeter[data-tone='warn'] { color: #ffcf5a; }
+.dosimeter[data-tone='bad'] { color: #ff7a60; border-color: #ff4a36; animation: blink 0.8s steps(2, start) infinite; }
+.dosimeter[hidden], .speedo[hidden], .progress[hidden], .fade[hidden] { display: none; }
+.speedo {
+  position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); padding: 6px 16px; border-radius: 6px;
+  background: var(--panel); border: 1px solid var(--panel-edge); font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.progress { position: absolute; left: 50%; top: calc(50% + 64px); transform: translateX(-50%); width: 280px; text-align: center; }
+.progress-label { font-size: 14px; margin-bottom: 6px; text-shadow: 0 1px 3px #000; }
+.progress-track { height: 8px; background: rgba(0, 0, 0, 0.55); border-radius: 4px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent); }
+.fade {
+  position: absolute; inset: 0; background: #000; display: flex; align-items: center; justify-content: center;
+  font-size: 22px; letter-spacing: 0.06em; color: var(--ink); text-align: center; padding: 20px;
 }
 .obj-title { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; font-weight: 700; }
 .obj { display: flex; gap: 9px; align-items: flex-start; padding: 3px 0; }
@@ -138,6 +166,6 @@ html, body {
 .ov-loading { color: var(--ink-dim); font-size: 14px; letter-spacing: 0.08em; }
 
 @media (max-width: 700px) {
-  .objectives { width: auto; left: 16px; bottom: 240px; }
+  .right-stack { width: auto; left: 16px; bottom: 240px; }
   .ov-title { font-size: 40px; }
 }

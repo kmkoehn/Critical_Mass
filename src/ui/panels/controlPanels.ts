@@ -2,6 +2,15 @@
 import { ANNUNCIATOR_TILES, type Annunciator } from '../../sim/annunciator';
 import { GRID_CONFIG, SUBSTATIONS, type Grid } from '../../sim/grid';
 import { TOWN_DISTRICT_NAMES } from '../../world/layout';
+import { faultAction, faultTitle, type FaultManager } from '../../sim/faults';
+
+/** "Day 2 · 14:05" from game seconds. */
+function gameTime(t: number): string {
+  const day = Math.floor(t / 86400) + 1;
+  const h = Math.floor((t % 86400) / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  return `Day ${day} · ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
 import { SIM_CONFIG } from '../../sim/config';
 import type { TrendRecorder, TrendSample } from '../../sim/history';
 import { TRIP_LABELS, averageRodInsertion, reactorStatus, type Reactor } from '../../sim/reactor';
@@ -13,6 +22,7 @@ import {
 export interface PanelContext {
   reactor(): Reactor;
   grid(): Grid;
+  faults(): FaultManager;
   annunciator: Annunciator;
   trends: TrendRecorder;
   gameSeconds(): number;
@@ -482,11 +492,29 @@ function gridPanel(ctx: PanelContext): PanelView {
   const shedLamp = lamp(town, 'Load shedding active');
   const rot = h('div', 'cp-note', town);
   const unserved = readout(town, 'Unserved energy (total)', 'MWh');
+  h('div', 'cp-divider', town);
+  h('div', 'cp-label', town, 'Line crews');
+  const crews = h('div', 'cp-crews', town);
+  let crewKey = '';
 
   return {
     title: 'Grid Dispatch',
     el,
     update() {
+      // Rebuild the crew list only when the set of downed lines (or their crews) changes.
+      const lines = ctx.faults().state.faults.filter((f) => f.kind === 'lineDown');
+      const key = lines.map((f) => `${f.id}:${f.crew?.phase ?? '-'}`).join(',');
+      if (key !== crewKey) {
+        crewKey = key;
+        crews.replaceChildren();
+        if (!lines.length) h('div', 'cp-note', crews, 'All transmission lines in service.');
+        for (const f of lines) {
+          const row = h('div', 'cp-crew', crews);
+          h('div', '', row, faultTitle(f));
+          if (f.crew) h('div', 'cp-note', row, faultAction(f));
+          else button(row, 'Dispatch line crew', () => ctx.faults().dispatchCrew(f.id, ctx.gameSeconds()), 'danger');
+        }
+      }
       const g = ctx.grid().state;
       freq.set(g.dead ? 'DEAD' : g.frequency.toFixed(2), g.dead ? 'bad' : g.frequency > 60.5 || g.frequency < 59.5 ? 'warn' : 'ok');
       fm.set(g.dead ? 57 : g.frequency, g.dead ? '—' : `${g.frequency.toFixed(2)} Hz`, g.frequency > cfg.overFreqTripHz ? 'bad' : 'ok');
@@ -529,10 +557,24 @@ function annunciatorPanel(ctx: PanelContext): PanelView {
     '<b>Fast flash</b> new alarm · <b>steady</b> acknowledged, still active · <b>slow flash</b> cleared, press reset. ' +
     'Colours: <span class="sev-trip">trip</span> <span class="sev-alarm">alarm</span> <span class="sev-warning">warning</span>.';
   const list = h('div', 'cp-alarm-list', el);
+  const logSec = section(el, 'Event log');
+  const logEl = h('div', 'cp-log', logSec);
+  let logLen = -1;
   return {
     title: 'Annunciator',
     el,
     update() {
+      const log = ctx.faults().state.log;
+      if (log.length !== logLen || (log.length && logEl.childElementCount === 0)) {
+        logLen = log.length;
+        logEl.replaceChildren();
+        if (!log.length) h('div', 'cp-note', logEl, 'Nothing logged yet.');
+        for (const e of log.slice(-14).reverse()) {
+          const row = h('div', `cp-log-row ${e.kind}`, logEl);
+          h('span', 'cp-log-t', row, gameTime(e.t));
+          h('span', '', row, e.text);
+        }
+      }
       const st = ctx.annunciator.state;
       ANNUNCIATOR_TILES.forEach((a, i) => {
         const s = st.tiles[a.id] ?? 'off';

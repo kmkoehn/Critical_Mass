@@ -158,6 +158,15 @@
 .cp-feeder.off { background: #3a1712; box-shadow: none; }
 .cp-district { padding: 1px 0; }
 
+.cp-crews { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.cp-crew { display: flex; flex-direction: column; gap: 4px; }
+.cp-log { display: flex; flex-direction: column; gap: 3px; font-size: 13px; max-height: 260px; overflow: auto; }
+.cp-log-row { display: flex; gap: 10px; padding: 2px 0; }
+.cp-log-row.warn { color: #ffcf7a; }
+.cp-log-row.danger { color: #ff8a70; }
+.cp-log-row.good { color: #8fe8a8; }
+.cp-log-t { color: #8b958e; font-family: Consolas, monospace; white-space: nowrap; }
+
 /* annunciator */
 .cp-annun { display: flex; flex-direction: column; gap: 12px; }
 .cp-tiles { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }

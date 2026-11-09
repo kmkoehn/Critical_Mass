@@ -49,6 +49,21 @@ export interface Pump {
   on: boolean;
   /** 0..1, follows `on` with spin-up / coast-down. */
   speed: number;
+  /** Motor bearing temperature, °C (rises with a bearing fault). */
+  bearingTemp: number;
+  /** Seized: can't run until repaired in the field. */
+  failed: boolean;
+}
+
+/** Equipment faults pushed in by the fault manager each step. */
+export interface PlantFaults {
+  feedValveStuck: boolean;
+  /** Cooling tower fans out of service (of 4). */
+  towerFansBroken: number;
+  /** River intake screens blocked, 0..1. */
+  intakeClog: number;
+  /** Fuel pad leak severity, 0..1. */
+  radLeak: number;
 }
 
 export interface ReactivityParts {
@@ -70,6 +85,7 @@ export interface ReactorState {
   scram: { active: boolean; cause: TripCause | null; time: number | null };
   safetyBypass: boolean;
   coolantPumps: Pump[];
+  plantFaults: PlantFaults;
   feedPumps: boolean[];
   auxFeed: AuxFeedMode;
   intakePumps: boolean[];
@@ -178,12 +194,18 @@ function steamFactor(secondaryTemp: number): number {
   return Math.min(1.3, Math.max(0, (secondaryTemp - st.minTemp) / (st.nominalTemp - st.minTemp)));
 }
 
-function coolingCapacity(intakePumps: boolean[], fans: number, env: Environment): number {
+/** Tower fans actually turning: commanded, minus any broken. */
+export function effectiveFans(s: Pick<ReactorState, 'towerFans' | 'plantFaults'>): number {
+  return Math.max(0, Math.min(s.towerFans, C.cooling.towerFans - s.plantFaults.towerFansBroken));
+}
+
+function coolingCapacity(s: ReactorState, env: Environment): number {
   const c = C.cooling;
-  const pumps = intakePumps.filter(Boolean).length;
-  const towerFactor = 0.75 + (0.25 * fans) / c.towerFans;
+  const pumps = s.intakePumps.filter(Boolean).length;
+  const towerFactor = 0.75 + (0.25 * effectiveFans(s)) / c.towerFans;
   const weather = Math.max(0.5, 1 - (env.ambientTemp - 15) * c.ambientDerate);
-  return pumps * c.intakePumpCapacityMW * towerFactor * weather;
+  const clog = 1 - 0.75 * s.plantFaults.intakeClog;
+  return pumps * c.intakePumpCapacityMW * towerFactor * weather * clog;
 }
 
 function emptyRadiation(): Record<RadiationZone, number> {
@@ -199,7 +221,8 @@ function coldState(): ReactorState {
     rodTargets: new Array(BANKS).fill(100),
     scram: { active: false, cause: null, time: null },
     safetyBypass: false,
-    coolantPumps: Array.from({ length: RCPS }, () => ({ on: false, speed: 0 })),
+    coolantPumps: Array.from({ length: RCPS }, () => ({ on: false, speed: 0, bearingTemp: 70, failed: false })),
+    plantFaults: { feedValveStuck: false, towerFansBroken: 0, intakeClog: 0, radLeak: 0 },
     feedPumps: [true, true],
     auxFeed: 'auto',
     intakePumps: [true, true],
@@ -320,6 +343,8 @@ const SUBSTEPS = 2;
 export class Reactor {
   readonly state: ReactorState;
   env: Environment;
+  /** Grid frequency seen by the generator (Hz), for governor droop. Set by the caller each step. */
+  gridHz = 60;
   private events: ReactorEvent[] = [];
   private wasCritical = false;
   private wasPrompt = false;
@@ -349,8 +374,28 @@ export class Reactor {
   setCoolantPump(i: number, on: boolean): void {
     const p = this.state.coolantPumps[i];
     if (!p || p.on === on) return;
+    if (on && p.failed) {
+      this.emit('warn', `RCP ${i + 1} is seized and needs repair in the field`);
+      return;
+    }
     p.on = on;
     this.emit('info', `Reactor coolant pump ${i + 1} ${on ? 'started' : 'stopped'}`);
+  }
+
+  /** A bearing has seized: the pump stops and can't restart until repaired. */
+  failPump(i: number): void {
+    const p = this.state.coolantPumps[i];
+    if (!p || p.failed) return;
+    p.failed = true;
+    p.on = false;
+    this.emit('danger', `RCP ${i + 1} tripped: motor bearing seized`);
+  }
+
+  repairPump(i: number): void {
+    const p = this.state.coolantPumps[i];
+    if (!p) return;
+    p.failed = false;
+    p.bearingTemp = 70;
   }
 
   setAllCoolantPumps(on: boolean): void {
@@ -599,7 +644,10 @@ export class Reactor {
     let valve = 0;
     if (!s.turbineTripped) {
       if (s.generatorSynced) {
-        valve = s.governorValve;
+        // Droop: high grid frequency pulls the valve back automatically.
+        const over = Math.max(0, this.gridHz - tb.syncRpm / 60 - tb.droopDeadbandHz);
+        const droop = Math.max(0.1, 1 - over / (60 * tb.droop));
+        valve = s.governorValve * droop;
       } else {
         // Speed governor: open just enough steam to hold the speed target.
         const need = tb.spinPowerMW * Math.pow(s.turbineSpeedTarget / tb.syncRpm, 2) / tb.efficiency;
@@ -624,7 +672,9 @@ export class Reactor {
 
     // Feedwater keeps SG level near nominal.
     const steamFrac = qSteam / rated;
-    const mainCap = s.feedPumps.filter(Boolean).length * fw.pumpCapacity;
+    // A stuck feed regulating valve limits main feed to ~85% of full-power steam flow:
+    // at full power the SG level sinks over a minute or two unless load is cut.
+    const mainCap = s.feedPumps.filter(Boolean).length * fw.pumpCapacity * (s.plantFaults.feedValveStuck ? 0.7 : 1);
     s.auxFeedRunning = s.auxFeed === 'on' ||
       (s.auxFeed === 'auto' && !s.safetyBypass && (s.steamGeneratorLevel < fw.auxStartLevel || (s.auxFeedRunning && s.steamGeneratorLevel < fw.nominalLevel)));
     const feedCap = mainCap + (s.auxFeedRunning ? fw.auxCapacity : 0);
@@ -690,7 +740,7 @@ export class Reactor {
 
     // --- turbine-generator
     const cc = C.cooling;
-    s.coolingCapacityMW = coolingCapacity(s.intakePumps, s.towerFans, env);
+    s.coolingCapacityMW = coolingCapacity(s, env);
     const vacFactor = 0.9 + 0.1 * (s.condenserVacuum / 100);
     const pMech = qTurb * tb.efficiency * vacFactor;
     if (s.generatorSynced) {
@@ -718,7 +768,7 @@ export class Reactor {
     const ratio = s.coolingCapacityMW > 0 ? s.condenserLoadMW / s.coolingCapacityMW : s.condenserLoadMW > 1 ? 3 : 0;
     s.condenserVacuum = Math.min(100, Math.max(0, 100 - 70 * Math.max(0, ratio - 0.8)));
     if (s.condenserVacuum < cc.vacuumTrip && qTurb > 1 && !s.turbineTripped) this.tripTurbine('low condenser vacuum');
-    const towerFactor = 0.75 + (0.25 * s.towerFans) / cc.towerFans;
+    const towerFactor = 0.75 + (0.25 * effectiveFans(s)) / cc.towerFans;
     s.coolingWaterTemp = env.riverTemp + 11 * Math.min(ratio, 2);
     s.outfallTemp = env.riverTemp + 4 * Math.min(ratio, 2) * (2 - towerFactor);
 
@@ -741,8 +791,8 @@ export class Reactor {
     R.containment = 5 + 4000 * s.neutronFlux + 200 * (s.decayHeatMW / rated) + 50000 * s.coreDamage;
     R.turbineHall = 0.2 + 15 * s.neutronFlux + 300 * s.coreDamage;
     R.controlRoom = 0.1 + 40 * s.coreDamage;
-    R.spentFuelPad = 2;
-    R.site = 0.1 + 10 * s.coreDamage + (s.porvOpen ? 0.5 : 0);
+    R.spentFuelPad = 2 + 8000 * s.plantFaults.radLeak;
+    R.site = 0.1 + 10 * s.coreDamage + (s.porvOpen ? 0.5 : 0) + 2 * s.plantFaults.radLeak;
 
     // --- reactor protection system
     if (!s.scram.active && !s.safetyBypass) {

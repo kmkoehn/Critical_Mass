@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CollisionWorld } from '../src/world/collision';
 import { Heightfield, createTerrainFunction } from '../src/world/heightfield';
-import { BRIDGE, PLANT, TOWN, WATER_LEVEL, riverX, zoneNameAt } from '../src/world/layout';
+import { BRIDGE, PLANT, SUBSTATION_SITES, TOWN, WATER_LEVEL, riverX, zoneNameAt } from '../src/world/layout';
 import { PlayerController } from '../src/player/controller';
 
 const hf = new Heightfield();
@@ -31,6 +31,15 @@ describe('terrain', () => {
   it('meets the bridge deck at both abutments', () => {
     for (const x of [BRIDGE.x0 - 2, BRIDGE.x1 + 2]) {
       expect(Math.abs(hf.heightAt(x, BRIDGE.z) - BRIDGE.deckTop)).toBeLessThan(0.5);
+    }
+  });
+
+  it('puts every substation on a level pad', () => {
+    for (const s of Object.values(SUBSTATION_SITES)) {
+      const c = hf.heightAt(s.x, s.z);
+      for (const [dx, dz] of [[-17, -13], [17, -13], [-17, 13], [17, 13], [0, 18]]) {
+        expect(Math.abs(hf.heightAt(s.x + dx, s.z + dz) - c)).toBeLessThan(0.3);
+      }
     }
   });
 

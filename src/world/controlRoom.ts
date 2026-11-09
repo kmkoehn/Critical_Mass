@@ -4,14 +4,13 @@
  */
 import * as THREE from 'three';
 import type { WorldBuilder } from './builder';
-import { PLANT_LAYOUT } from './layout';
+import { PLANT_LAYOUT, type FieldPointId } from './layout';
 
 export type PanelId = 'reactor' | 'primary' | 'turbine' | 'cooling' | 'grid' | 'annunciator' | 'trends';
 
-export interface Interactable {
-  panelId: PanelId;
-  label: string;
-}
+export type Interactable =
+  | { kind: 'panel'; panelId: PanelId; label: string }
+  | { kind: 'field'; point: FieldPointId };
 
 export interface Screen {
   canvas: HTMLCanvasElement;
@@ -62,13 +61,13 @@ export function buildControlRoom(b: WorldBuilder, floorY: number): ControlRoomHa
     cooling: makeScreen(512, 320),
     grid: makeScreen(512, 320),
     trends: makeScreen(768, 440),
-    annunciator: makeScreen(1400, 360),
+    annunciator: makeScreen(1400, 440),
   } satisfies Record<PanelId, Screen>;
 
   const tag = (obj: THREE.Object3D, panelId: PanelId, label: string) => {
     obj.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) {
-        o.userData.interact = { panelId, label } satisfies Interactable;
+        o.userData.interact = { kind: 'panel', panelId, label } satisfies Interactable;
         interactables.push(o);
       }
     });

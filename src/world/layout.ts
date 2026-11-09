@@ -128,6 +128,11 @@ export const ROADS: readonly Road[] = [
   { name: 'County Road', kind: 'asphalt', width: 8, points: [[330, 0], [520, 60], [700, 160], [900, 250]] },
   { name: 'Farm Track', kind: 'dirt', width: 5, points: [[700, 160], [690, 330], [640, 410]] },
   { name: 'Orchard Lane', kind: 'dirt', width: 5, points: [[520, 60], [540, 250], [650, 330]] },
+  // Service tracks to the substation gates (south side of each).
+  { name: 'Substation Lane', kind: 'dirt', width: 5, points: [[290, 240], [352, 292]] },
+  { name: 'Industrial Substation Track', kind: 'dirt', width: 5, points: [[330, 470], [480, 470], [545, 545]] },
+  { name: 'Farm Substation Track', kind: 'dirt', width: 5, points: [[640, 127], [640, 82]] },
+  { name: 'Tie-Line Track', kind: 'dirt', width: 5, points: [[700, 160], [790, 60], [880, -10], [905, -45]] },
 ];
 
 export function distanceToRoads(x: number, z: number): number {
@@ -186,6 +191,34 @@ export const TOWN_DISTRICT_NAMES = [
   'Riverside North', 'Old Town North', 'Schoolside', 'East End North',
   'Riverside South', 'Town Hall', 'Midtown South', 'East End South',
 ];
+
+// ---------------------------------------------------------------- field equipment
+
+/** River intake structure on the west bank, just north-east of the plant fence. */
+export const INTAKE = { x0: -262, x1: riverX(60) - 22, cz: 60, halfZ: 7 };
+
+export type FieldPointId =
+  | 'sub:town' | 'sub:industrial' | 'sub:farmland' | 'sub:city'
+  | 'intake' | 'fwValve' | 'rcp' | 'fan:0' | 'fan:1' | 'spentFuel';
+
+/** Where each piece of repairable field equipment stands. */
+export const FIELD_POINTS: Record<FieldPointId, { x: number; z: number; name: string }> = {
+  'sub:town': { x: SUBSTATION_SITES.town.x + 8.4, z: SUBSTATION_SITES.town.z + 6.5, name: 'Millbrook Substation' },
+  'sub:industrial': { x: SUBSTATION_SITES.industrial.x + 8.4, z: SUBSTATION_SITES.industrial.z + 6.5, name: 'Industrial Park Substation' },
+  'sub:farmland': { x: SUBSTATION_SITES.farmland.x + 8.4, z: SUBSTATION_SITES.farmland.z + 6.5, name: 'Farmland Substation' },
+  'sub:city': { x: SUBSTATION_SITES.city.x + 8.4, z: SUBSTATION_SITES.city.z + 6.5, name: 'City Tie-Line Terminal' },
+  intake: { x: INTAKE.x1 - 5, z: INTAKE.cz, name: 'River intake' },
+  fwValve: { x: -460, z: -27.5, name: 'Turbine hall feed valve FW-3B' },
+  rcp: { x: -495.4, z: -40, name: 'Containment access (RCP motors)' },
+  'fan:0': { x: PLANT_LAYOUT.coolingTowers[0].x, z: PLANT_LAYOUT.coolingTowers[0].z - 40, name: 'Cooling tower 1 fan controls' },
+  'fan:1': { x: PLANT_LAYOUT.coolingTowers[1].x, z: PLANT_LAYOUT.coolingTowers[1].z - 40, name: 'Cooling tower 2 fan controls' },
+  spentFuel: { x: PLANT_LAYOUT.spentFuel.cx + PLANT_LAYOUT.spentFuel.w / 2 + 1.2, z: PLANT_LAYOUT.spentFuel.cz, name: 'Dry-cask fuel pad' },
+};
+
+/** Where the utility truck is parked at the start. */
+export const TRUCK_SPAWN = { x: -362, z: 36, yaw: -Math.PI / 2 };
+/** Where you wake up after a forced rest. */
+export const REST_POINT = { x: -385, z: -96, yaw: Math.PI };
 
 // ---------------------------------------------------------------- names & zones
 export const PLANT_NAME = 'Riverbend Generating Station';

@@ -5,10 +5,10 @@ director of the Riverbend Generating Station, a revived plant in a river valley.
 valley, run the reactor from a real control room, keep the town of Millbrook powered, and keep
 the place from melting down.
 
-> **Status: Milestone 4 — grid and town.** Riverbend now feeds an island grid of four substations.
-> Run the reactor from the Unit 1 control room (the low building just south of the plant road,
-> door on its north side) and match output to demand. Fall short and Millbrook's districts go
-> dark in rolling blackouts; overshoot and grid protection disconnects you.
+> **Status: Milestone 5 — field faults, weather and the truck.** Equipment around the valley now
+> breaks, storms throw lightning at substations and power lines, and you drive the utility truck
+> out to fix things in person. Run the reactor from the Unit 1 control room (the low building just
+> south of the plant road, door on its north side) and keep Millbrook's lights on.
 > The full plan is in `nuclear-plant-game-prompt.md`.
 
 ## Run it
@@ -31,7 +31,8 @@ npm run build      # type-check + production build into dist/
 | Shift | Sprint |
 | Space | Jump |
 | C or Ctrl | Crouch |
-| E | Use whatever the crosshair is on (control-room consoles, alarm wall, trend recorder) |
+| E | Use whatever the crosshair is on (control-room consoles, field equipment), get in or out of the truck |
+| W A S D (in the truck) | Drive and steer. Space is the handbrake; the mouse swings the camera |
 | M | Full-screen map |
 | Esc | Pause (releases the mouse). With a panel open, Esc (or E) closes it |
 | \` (backtick) | Debug panel. While it's open: **N** toggles noclip flying, **T** skips ahead one hour, **=** cycles simulation speed ×1 / ×4 / ×16 |
@@ -82,6 +83,39 @@ Total demand runs from about 480 MW overnight to about 950 MW. Hot or cold weath
 
 The top bar shows served/demand and frequency. The Grid Dispatch console shows everything else.
 
+With governor droop, the turbine automatically closes its valve as grid frequency rises. Losing a
+whole substation's load holds the frequency near 61 Hz instead of tripping you off, which gives
+you time to rebalance.
+
+## Weather, faults and the field
+
+**Weather** changes every few game hours: clear, cloudy, rain, thunderstorm, heatwave or cold
+snap. It sets the air and river temperature (heat and cold raise demand, hot weather cuts cooling
+capacity), the clouds and fog, and the rain. Thunderstorms throw about 10 lightning strikes per game
+hour, and tall structures attract them.
+
+**Faults** show up four ways: as a work order (bottom right, with distance and direction), a red
+diamond on the minimap and map, a tile on the annunciator wall, and an amber flashing beacon on the
+equipment itself. Most are fixed in person: walk up, look at the equipment, press **E**, and hold
+your aim until the repair bar fills.
+
+| Fault | Effect | Fix |
+| --- | --- | --- |
+| Substation breaker tripped (lightning) | That substation blacks out | Reset the breaker cabinet beside its control hut |
+| Transmission line down (lightning) | Its substations limp along at half capacity | Dispatch a line crew from Grid Dispatch (~3.5 game hours) |
+| River intake clogged (rain and storms make it worse) | Cooling capacity falls, then condenser vacuum, then the turbine trips | Clear the screens at the intake pier on the riverbank north-east of the plant |
+| RCP bearing overheating (audible whine near containment) | Seizes the pump after ~4 game hours if ignored | Stop that pump from the control room, then service it at the containment access panel |
+| Feed valve FW-3B stuck | Feedwater limited: steam generator level sags at high power | Free the valve in the turbine hall |
+| Cooling tower fans failed | Two fans out, less cooling | Repair at the tower's base cabinet |
+| Fuel pad radiation leak | Dose rate around the dry casks climbs | Reseal at the pad's monitor cabinet, and watch your dose |
+
+**The utility truck** is parked in the plant car park. It does about 97 km/h on roads and 47 km/h
+off them, crosses the bridge, and stops at the water's edge. Dirt service tracks lead to each
+substation's gate.
+
+**Dosimeter.** Radiation near the fuel pad, containment and turbine hall adds to your daily dose
+(bottom left). At 50 mSv, health physics sends you off site for 8 hours of rest.
+
 ### Debug reactor shortcuts (debug panel open)
 
 | Key | Action |
@@ -94,6 +128,8 @@ The top bar shows served/demand and frequency. The Grid Dispatch console shows e
 | R | Reset the reactor trip (rods fully in, no trip condition), or reset a turbine trip |
 | B | Safety bypass key: disables automatic trips, aux feedwater and safety injection |
 | L / K | Load the plant at full power / reset to cold shutdown |
+| O | Next weather |
+| U | Inject the next fault type (for testing) |
 
 ## How the reactor works
 
@@ -145,9 +181,10 @@ One in-game day lasts 20 real minutes, starting at 08:00.
 ```
 src/
   main.ts       bootstrap + game loop (fixed-step sim, variable render)
-  sim/          simulation (no rendering): clock, reactor plant model, alarms, annunciator, trends, island grid, config
-  world/        layout data, terrain, river, roads, buildings, town, countryside, sky, collision
-  player/       input, first-person controller, crosshair interaction
+  sim/          simulation (no rendering): clock, reactor, alarms, annunciator, trends, island grid, weather, faults, config
+  world/        layout data, terrain, river, roads, buildings, town, countryside, grid structures, field equipment,
+                truck model, sky, rain/lightning, collision
+  player/       input, first-person controller, crosshair interaction, truck physics
   ui/           HUD, minimap, full map, in-world screens, alarm horn, control panels (ui/panels/)
   util/         seeded RNG, noise, math
 tests/          Vitest unit tests

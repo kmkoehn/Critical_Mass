@@ -22,6 +22,13 @@ export class Hud {
   private readonly reactor: HTMLElement;
   private readonly prompt: HTMLElement;
   private readonly gridEl: HTMLElement;
+  private readonly workOrders: HTMLElement;
+  private readonly dosimeter: HTMLElement;
+  private readonly speedo: HTMLElement;
+  private readonly progress: HTMLElement;
+  private readonly progressLabel: HTMLElement;
+  private readonly progressFill: HTMLElement;
+  private readonly fade: HTMLElement;
   private readonly zone: HTMLElement;
   private readonly fps: HTMLElement;
   private readonly objectives: HTMLElement;
@@ -57,7 +64,20 @@ export class Hud {
     this.minimapCanvas = el('canvas', '', mm);
     el('div', 'minimap-hint', mm).textContent = 'M  Map';
 
-    this.objectives = el('div', 'objectives', this.root);
+    const right = el('div', 'right-stack', this.root);
+    this.workOrders = el('div', 'work-orders', right);
+    this.workOrders.hidden = true;
+    this.objectives = el('div', 'objectives', right);
+    this.dosimeter = el('div', 'dosimeter', this.root);
+    this.dosimeter.hidden = true;
+    this.speedo = el('div', 'speedo', this.root);
+    this.speedo.hidden = true;
+    this.progress = el('div', 'progress', this.root);
+    this.progress.hidden = true;
+    this.progressLabel = el('div', 'progress-label', this.progress);
+    this.progressFill = el('div', 'progress-fill', el('div', 'progress-track', this.progress));
+    this.fade = el('div', 'fade', this.root);
+    this.fade.hidden = true;
     this.toasts = el('div', 'toasts', this.root);
     this.debug = el('pre', 'debug', this.root);
     this.debug.hidden = true;
@@ -136,9 +156,50 @@ export class Hud {
     if (label !== null) this.set(this.prompt, label);
   }
 
+  setWorkOrders(list: ReadonlyArray<{ title: string; action: string; where: string; tone: 'warn' | 'bad' }>): void {
+    this.workOrders.hidden = list.length === 0;
+    const html = `<div class="obj-title">Work orders</div>` + list.map((w) =>
+      `<div class="wo ${w.tone}"><div class="wo-title">${w.title}</div><div class="wo-meta">${w.action} · ${w.where}</div></div>`).join('');
+    if (this.lastText.get(this.workOrders) === html) return;
+    this.lastText.set(this.workOrders, html);
+    this.workOrders.innerHTML = html;
+  }
+
+  /** Personal dosimeter: rate in µSv/h, today's dose in mSv. */
+  setDosimeter(rateUSv: number, doseMSv: number, limitMSv: number): void {
+    const show = rateUSv > 1 || doseMSv > 0.01;
+    this.dosimeter.hidden = !show;
+    if (!show) return;
+    const tone = doseMSv > limitMSv * 0.6 || rateUSv > 2000 ? 'bad' : rateUSv > 100 ? 'warn' : 'ok';
+    if (this.dosimeter.dataset.tone !== tone) this.dosimeter.dataset.tone = tone;
+    const rate = rateUSv >= 1000 ? `${(rateUSv / 1000).toFixed(1)} mSv/h` : `${rateUSv.toFixed(rateUSv < 10 ? 1 : 0)} µSv/h`;
+    this.set(this.dosimeter, `☢ ${rate} · ${doseMSv.toFixed(2)} / ${limitMSv} mSv today`);
+  }
+
+  setSpeed(kmh: number | null): void {
+    this.speedo.hidden = kmh === null;
+    if (kmh !== null) this.set(this.speedo, `${Math.round(Math.abs(kmh))} km/h`);
+  }
+
+  setProgress(label: string | null, frac = 0): void {
+    this.progress.hidden = label === null;
+    if (label === null) return;
+    this.set(this.progressLabel, label);
+    this.progressFill.style.width = `${Math.round(frac * 100)}%`;
+  }
+
+  setFade(text: string | null): void {
+    this.fade.hidden = text === null;
+    if (text !== null) this.set(this.fade, text);
+  }
+
   /** Hide gameplay chrome (crosshair, prompt) while a full-screen panel is open. */
   setPanelMode(on: boolean): void {
     this.root.classList.toggle('panel-open', on);
+  }
+
+  setDriving(on: boolean): void {
+    this.root.classList.toggle('driving', on);
   }
 
   setObjectives(title: string, list: readonly Objective[]): void {

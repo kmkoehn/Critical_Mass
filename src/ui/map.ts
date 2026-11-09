@@ -112,7 +112,7 @@ export class Minimap {
     this.g.scale(dpr, dpr);
   }
 
-  draw(x: number, z: number, yaw: number): void {
+  draw(x: number, z: number, yaw: number, pins: readonly MapPin[] = []): void {
     const g = this.g;
     const s = this.px;
     const c = s / 2;
@@ -129,6 +129,19 @@ export class Minimap {
     const span = WORLD_HALF * 2 * k;
     g.imageSmoothingEnabled = true;
     g.drawImage(this.image, -(x + WORLD_HALF) * k, -(z + WORLD_HALF) * k, span, span);
+    // Pins: out-of-range ones are pinned to the rim so you can see which way to go.
+    for (const p of pins) {
+      let dx = (p.x - x) * k;
+      let dz = (p.z - z) * k;
+      const d = Math.hypot(dx, dz);
+      const edge = c - 12;
+      const outside = d > edge;
+      if (outside) {
+        dx *= edge / d;
+        dz *= edge / d;
+      }
+      drawPin(g, dx, dz, p, outside ? 4 : 6);
+    }
     g.restore();
 
     // North marker on the rim.
@@ -158,6 +171,33 @@ export class Minimap {
   }
 }
 
+/** A coloured map pin: fault (diamond) or vehicle (square). */
+export interface MapPin {
+  x: number;
+  z: number;
+  color: string;
+  shape: 'diamond' | 'square';
+  label?: string;
+}
+
+function drawPin(g: CanvasRenderingContext2D, px: number, py: number, p: MapPin, r: number): void {
+  g.beginPath();
+  if (p.shape === 'diamond') {
+    g.moveTo(px, py - r);
+    g.lineTo(px + r, py);
+    g.lineTo(px, py + r);
+    g.lineTo(px - r, py);
+    g.closePath();
+  } else {
+    g.rect(px - r * 0.8, py - r * 0.8, r * 1.6, r * 1.6);
+  }
+  g.fillStyle = p.color;
+  g.strokeStyle = '#111';
+  g.lineWidth = 1.5;
+  g.fill();
+  g.stroke();
+}
+
 export interface MapMarker {
   x: number;
   z: number;
@@ -182,6 +222,7 @@ export class BigMap {
   draw(
     x: number, z: number, yaw: number, markers: readonly MapMarker[],
     power?: { darkDistricts: readonly number[]; substation: (id: SubstationId) => 'on' | 'out' | 'dead' },
+    pins: readonly MapPin[] = [],
   ): void {
     if (!this.visible) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -238,6 +279,19 @@ export class BigMap {
       g.lineWidth = 2;
       g.strokeStyle = '#111';
       g.stroke();
+    }
+
+    for (const pin of pins) {
+      drawPin(g, P(pin.x), P(pin.z), pin, 8);
+      if (pin.label) {
+        g.font = '600 12px Bahnschrift, "Segoe UI", sans-serif';
+        g.textAlign = 'left';
+        g.lineWidth = 3;
+        g.strokeStyle = 'rgba(12,16,20,0.85)';
+        g.strokeText(pin.label, P(pin.x) + 11, P(pin.z) + 1);
+        g.fillStyle = pin.color;
+        g.fillText(pin.label, P(pin.x) + 11, P(pin.z) + 1);
+      }
     }
 
     g.save();

@@ -98,6 +98,31 @@ describe('island grid', () => {
     expect(tripped).toMatch(/over-frequency/);
   });
 
+  it('governor droop rides through losing a substation without tripping', () => {
+    const r = new Reactor(createReactorState('fullPower'));
+    const g = new Grid();
+    let t = 13 * 3600;
+    const tick = () => {
+      t += DT * SCALE;
+      r.gridHz = g.state.dead ? 60 : g.state.frequency;
+      r.step(DT, DT * SCALE);
+      const res = g.step(DT, t, DT * SCALE, r.state.generatorSynced ? r.state.electricalOutputMW : 0, 18);
+      if (res.generatorTrip) r.generatorTrip(res.generatorTrip);
+    };
+    // Settle with output matched to demand (one tick first so demand is known).
+    tick();
+    for (let i = 0; i < 300; i++) {
+      r.setGovernorValve(r.state.governorValve * (1 + 0.3 * (g.state.demandMW - r.state.electricalOutputMW) / Math.max(g.state.demandMW, 100)));
+      tick();
+    }
+    expect(r.state.generatorSynced).toBe(true);
+    g.state.subs.city.breakerClosed = false; // lightning takes out ~300 MW of load
+    for (let i = 0; i < 300; i++) tick();
+    expect(r.state.generatorSynced).toBe(true);
+    expect(g.state.frequency).toBeGreaterThan(60.2);
+    expect(g.state.frequency).toBeLessThan(61.2);
+  });
+
   it('a big load rejection from the grid trips the turbine and reactor', () => {
     const r = new Reactor(createReactorState('fullPower'));
     r.generatorTrip('grid over-frequency protection');

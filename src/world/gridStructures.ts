@@ -3,8 +3,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { WorldBuilder } from './builder';
 import {
-  POWER_LINES, RIVER_HALF_WIDTH, SUBSTATION_SITES, SWITCHYARD_POINT, distanceToRoads, riverDistance,
-  type SubstationId,
+  FIELD_POINTS, POWER_LINES, RIVER_HALF_WIDTH, SUBSTATION_SITES, SWITCHYARD_POINT, distanceToRoads, riverDistance,
+  type FieldPointId, type SubstationId,
 } from './layout';
 
 const SPACING = 115;
@@ -181,6 +181,9 @@ export function buildGridStructures(b: WorldBuilder): GridStructureHandles {
     beacon.position.set(site.x + 12, fy + 3.9, site.z + 6.5);
     b.root.add(beacon);
     beacons[id] = beaconMat;
+    // Breaker cabinet against the hut's west wall, reset here after a trip.
+    const fp = FIELD_POINTS[`sub:${id}` as FieldPointId];
+    b.cabinet(`sub:${id}` as FieldPointId, fp.x + 0.2, fp.z, 0.6, 2.0, 1.4, fy);
   }
 
   return { beacons, towerCount: towers.length };

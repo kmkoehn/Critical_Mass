@@ -6,7 +6,7 @@
 import { clamp, lerp, smoothstep } from '../util/math';
 import { createNoise2D, fbm } from '../util/noise';
 import {
-  BRIDGE, FLAT_ZONES, LOOKOUT, RIVER_BANK, RIVER_HALF_WIDTH, Rect, SEED, WORLD_HALF, riverX,
+  BRIDGE, FLAT_ZONES, LOOKOUT, RIVER_BANK, RIVER_HALF_WIDTH, Rect, SEED, SUBSTATION_SITES, WORLD_HALF, riverX,
 } from './layout';
 
 export const GRID_SEGMENTS = 320;
@@ -29,7 +29,7 @@ export function createTerrainFunction(seed = SEED): HeightFn {
   const n3 = createNoise2D(seed + 2);
   const twoSigma2 = 2 * LOOKOUT.sigma * LOOKOUT.sigma;
 
-  return (x: number, z: number): number => {
+  const shaped = (x: number, z: number): number => {
     // Rolling base terrain.
     let h = 12 + 11 * fbm(n1, x / 450, z / 450, 4) + 3 * fbm(n2, x / 80, z / 80, 3);
 
@@ -47,7 +47,18 @@ export function createTerrainFunction(seed = SEED): HeightFn {
       const m = rectMask(x, z, zone, zone.falloff);
       if (m > 0) h = lerp(h, zone.elev, m);
     }
-    h = Math.max(h, 2.5);
+    return Math.max(h, 2.5);
+  };
+
+  // Substations sit on small level pads at the natural ground height of their site.
+  const pads = Object.values(SUBSTATION_SITES).map((s) => ({ cx: s.x, cz: s.z, hx: 21, hz: 18, elev: shaped(s.x, s.z) }));
+
+  return (x: number, z: number): number => {
+    let h = shaped(x, z);
+    for (const p of pads) {
+      const m = rectMask(x, z, p, 22);
+      if (m > 0) h = lerp(h, p.elev, m);
+    }
 
     // River channel.
     const d = Math.abs(x - riverX(z));

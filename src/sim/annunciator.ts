@@ -8,13 +8,15 @@
  */
 import { ALARMS, type Severity } from './alarms';
 import { GRID_ALARMS } from './grid';
+import { FAULT_ALARMS } from './faults';
 
 export type TileState = 'off' | 'alerting' | 'acked' | 'clearing';
 
-/** Every tile on the annunciator wall: plant alarms then grid alarms. */
+/** Every tile on the annunciator wall: plant alarms, grid alarms, then field faults. */
 export const ANNUNCIATOR_TILES: ReadonlyArray<{ id: string; label: string; severity: Severity }> = [
   ...ALARMS.map(({ id, label, severity }) => ({ id, label, severity })),
   ...GRID_ALARMS.map(({ id, label, severity }) => ({ id, label, severity })),
+  ...FAULT_ALARMS.map(({ id, label, severity }) => ({ id, label, severity })),
 ];
 
 export interface AnnunciatorState {

@@ -152,6 +152,12 @@ export const SIM_CONFIG = {
     reversePowerDelay: 5,
     /** Max governor valve movement, fraction per second. */
     valveRate: 0.05,
+    /**
+     * Governor droop: on the grid, the governor automatically closes the valve as frequency rises,
+     * by 100% over this fraction of nominal frequency (4% = 2.4 Hz). Rides through sudden load loss.
+     */
+    droop: 0.04,
+    droopDeadbandHz: 0.05,
   },
 
   cooling: {
