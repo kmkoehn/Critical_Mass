@@ -416,6 +416,20 @@ export class Reactor {
     return true;
   }
 
+  /**
+   * Open the generator breaker (grid protection). A big load rejection also trips the turbine;
+   * a small one leaves it spinning on its speed governor, ready to resync.
+   */
+  generatorTrip(reason: string): void {
+    const s = this.state;
+    if (!s.generatorSynced) return;
+    const load = s.electricalOutputMW;
+    s.generatorSynced = false;
+    s.turbineSpeedTarget = C.turbine.syncRpm;
+    this.emit('warn', `Generator breaker opened: ${reason}`);
+    if (load > 500) this.tripTurbine('load rejection');
+  }
+
   tripTurbine(reason = 'manual turbine trip'): void {
     const s = this.state;
     if (s.turbineTripped) return;

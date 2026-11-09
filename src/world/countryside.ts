@@ -148,19 +148,27 @@ function buildIndustrial(b: WorldBuilder): void {
   const m = b.mats;
   const I = INDUSTRIAL;
   const base = b.groundY(I.cx, I.cz);
+  b.setLightGroup('industrial:0');
   b.building(I.cx - 70, I.cz - 40, 70, 40, 14, m.industrialWalls, m.roofGrey, { baseY: base });
+  b.setLightGroup('industrial:1');
   b.building(I.cx + 40, I.cz - 45, 60, 30, 12, m.industrialWalls, m.roofGrey, { baseY: base });
+  b.setLightGroup('industrial:2');
   b.building(I.cx - 20, I.cz + 45, 90, 35, 18, m.industrialWalls, m.roofGrey, { baseY: base });
+  b.setLightGroup(null);
   b.cylinder(I.cx + 85, I.cz + 40, 2.2, base, base + 45, m.concreteDark, { segments: 16, rTop: 1.6 });
   for (let i = 0; i < 3; i++) b.cylinder(I.cx + 70 + i * 16, I.cz - 5, 6, base, base + 12, m.metal, { segments: 24 });
   b.box(I.cx - 120, base - 0.2, I.cz - 10, I.cx + 120, base + 0.08, I.cz + 18, m.asphalt, { collide: false, map: '#3b3d40', castShadow: false });
 }
 
 export function buildCountryside(b: WorldBuilder): LookoutHandles & { trees: number } {
+  b.setLightGroup('farmland:0');
   buildFarm(b, 600, 140, false);
+  b.setLightGroup('farmland:1');
   buildFarm(b, 760, 340, true);
+  b.setLightGroup('farmland:2');
   buildFarm(b, 560, 330, false);
   buildIndustrial(b);
+  b.setLightGroup(null);
   const look = buildLookout(b);
   const trees = buildTrees(b);
   return { ...look, trees };

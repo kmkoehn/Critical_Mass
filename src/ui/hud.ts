@@ -21,6 +21,7 @@ export class Hud {
   private readonly weather: HTMLElement;
   private readonly reactor: HTMLElement;
   private readonly prompt: HTMLElement;
+  private readonly gridEl: HTMLElement;
   private readonly zone: HTMLElement;
   private readonly fps: HTMLElement;
   private readonly objectives: HTMLElement;
@@ -43,6 +44,8 @@ export class Hud {
     this.weather = el('span', 'tb-weather', left);
     el('span', 'tb-sep', left);
     this.reactor = el('span', 'tb-reactor', left);
+    el('span', 'tb-sep', left);
+    this.gridEl = el('span', 'tb-grid', left);
     this.zone = el('div', 'tb-zone', top);
     this.fps = el('div', 'tb-right', top);
 
@@ -111,7 +114,12 @@ export class Hud {
     e.textContent = text;
   }
 
-  update(info: { time: string; weather: string; zone: string; fps: number; reactor: string }): void {
+  update(info: {
+    time: string; weather: string; zone: string; fps: number; reactor: string;
+    grid: { text: string; tone: 'ok' | 'warn' | 'bad' | 'dim' };
+  }): void {
+    this.set(this.gridEl, info.grid.text);
+    if (this.gridEl.dataset.tone !== info.grid.tone) this.gridEl.dataset.tone = info.grid.tone;
     this.set(this.time, info.time);
     this.set(this.weather, info.weather);
     if (this.lastText.get(this.reactor) !== info.reactor) {

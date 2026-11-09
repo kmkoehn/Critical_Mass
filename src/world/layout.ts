@@ -143,6 +143,50 @@ export function distanceToRoads(x: number, z: number): number {
   return best;
 }
 
+// ---------------------------------------------------------------- power grid
+
+export type SubstationId = 'town' | 'industrial' | 'farmland' | 'city';
+
+export const SUBSTATION_SITES: Record<SubstationId, { x: number; z: number; name: string }> = {
+  town: { x: 352, z: 268, name: 'Millbrook Substation' },
+  industrial: { x: 545, z: 520, name: 'Industrial Park Substation' },
+  farmland: { x: 640, z: 60, name: 'Farmland Substation' },
+  city: { x: 905, z: -70, name: 'City Tie-Line Terminal' },
+};
+
+/** Switchyard at the plant, where every line starts. */
+export const SWITCHYARD_POINT: readonly [number, number] = [-390, 110];
+/** Where the trunk line splits towards the substations. */
+export const GRID_JUNCTION: readonly [number, number] = [150, 330];
+
+export interface PowerLine {
+  id: string;
+  /** Substations that lose supply if this line is down. */
+  feeds: SubstationId[];
+  points: ReadonlyArray<readonly [number, number]>;
+}
+
+export const POWER_LINES: readonly PowerLine[] = [
+  { id: 'trunk', feeds: ['town', 'industrial', 'farmland', 'city'], points: [SWITCHYARD_POINT, [-300, 250], [-100, 320], GRID_JUNCTION] },
+  { id: 'town', feeds: ['town'], points: [GRID_JUNCTION, [SUBSTATION_SITES.town.x, SUBSTATION_SITES.town.z]] },
+  { id: 'industrial', feeds: ['industrial'], points: [GRID_JUNCTION, [330, 410], [520, 425], [SUBSTATION_SITES.industrial.x, SUBSTATION_SITES.industrial.z]] },
+  { id: 'farmland', feeds: ['farmland', 'city'], points: [GRID_JUNCTION, [420, 300], [SUBSTATION_SITES.farmland.x, SUBSTATION_SITES.farmland.z]] },
+  { id: 'city', feeds: ['city'], points: [[SUBSTATION_SITES.farmland.x, SUBSTATION_SITES.farmland.z], [770, -30], [SUBSTATION_SITES.city.x, SUBSTATION_SITES.city.z]] },
+];
+
+/** Millbrook's 8 distribution districts: 4 columns (between the N–S streets) × north/south of Main Street. */
+export const TOWN_DISTRICTS = 8;
+export function townDistrictAt(x: number, z: number): number {
+  const edges = [-60, 60, 180];
+  let col = 0;
+  while (col < edges.length && x > edges[col]) col++;
+  return col + (z >= 0 ? 4 : 0);
+}
+export const TOWN_DISTRICT_NAMES = [
+  'Riverside North', 'Old Town North', 'Schoolside', 'East End North',
+  'Riverside South', 'Town Hall', 'Midtown South', 'East End South',
+];
+
 // ---------------------------------------------------------------- names & zones
 export const PLANT_NAME = 'Riverbend Generating Station';
 export const TOWN_NAME = 'Millbrook';
@@ -162,6 +206,7 @@ export const MAP_LABELS: readonly MapLabel[] = [
   { name: 'North Woods', x: -150, z: -600, size: 'md' },
   { name: 'West Woods', x: -820, z: 200, size: 'sm' },
   { name: RIVER_NAME, x: riverX(420) + 40, z: 420, size: 'sm' },
+  { name: 'City Tie-Line', x: 905, z: -110, size: 'sm' },
 ];
 
 /** Human-readable name of the area at a position (for the HUD). */

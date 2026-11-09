@@ -6,9 +6,16 @@
  *   acked ──condition clears──▶ clearing (slow flash)
  *   clearing ──reset──▶ off;  clearing ──alarm returns──▶ alerting
  */
-import { ALARMS } from './alarms';
+import { ALARMS, type Severity } from './alarms';
+import { GRID_ALARMS } from './grid';
 
 export type TileState = 'off' | 'alerting' | 'acked' | 'clearing';
+
+/** Every tile on the annunciator wall: plant alarms then grid alarms. */
+export const ANNUNCIATOR_TILES: ReadonlyArray<{ id: string; label: string; severity: Severity }> = [
+  ...ALARMS.map(({ id, label, severity }) => ({ id, label, severity })),
+  ...GRID_ALARMS.map(({ id, label, severity }) => ({ id, label, severity })),
+];
 
 export interface AnnunciatorState {
   tiles: Record<string, TileState>;
@@ -17,7 +24,7 @@ export interface AnnunciatorState {
 
 export function createAnnunciatorState(): AnnunciatorState {
   const tiles: Record<string, TileState> = {};
-  for (const a of ALARMS) tiles[a.id] = 'off';
+  for (const a of ANNUNCIATOR_TILES) tiles[a.id] = 'off';
   return { tiles, silenced: false };
 }
 

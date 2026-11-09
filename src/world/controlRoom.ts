@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import type { WorldBuilder } from './builder';
 import { PLANT_LAYOUT } from './layout';
 
-export type PanelId = 'reactor' | 'primary' | 'turbine' | 'cooling' | 'annunciator' | 'trends';
+export type PanelId = 'reactor' | 'primary' | 'turbine' | 'cooling' | 'grid' | 'annunciator' | 'trends';
 
 export interface Interactable {
   panelId: PanelId;
@@ -60,8 +60,9 @@ export function buildControlRoom(b: WorldBuilder, floorY: number): ControlRoomHa
     primary: makeScreen(512, 320),
     turbine: makeScreen(512, 320),
     cooling: makeScreen(512, 320),
+    grid: makeScreen(512, 320),
     trends: makeScreen(768, 440),
-    annunciator: makeScreen(1400, 260),
+    annunciator: makeScreen(1400, 360),
   } satisfies Record<PanelId, Screen>;
 
   const tag = (obj: THREE.Object3D, panelId: PanelId, label: string) => {
@@ -120,6 +121,8 @@ export function buildControlRoom(b: WorldBuilder, floorY: number): ControlRoomHa
   addConsole(L.cx + 7.5, boardZ, 5.5, 0, 'turbine', 'Turbine & Grid Panel');
   // Circulating water console against the east wall, operator facing east.
   addConsole(x1 - 1.3, L.cz - 3.5, 4.5, Math.PI / 2, 'cooling', 'Cooling Water Panel');
+  // Grid dispatch console against the west wall, operator facing west.
+  addConsole(x0 + 1.3, L.cz + 6.5, 4, -Math.PI / 2, 'grid', 'Grid Dispatch Panel');
 
   // Annunciator wall on the south wall, above the board.
   {
@@ -177,6 +180,7 @@ export function buildControlRoom(b: WorldBuilder, floorY: number): ControlRoomHa
     primary: { x: L.cx - 7.5, z: boardZ - 1.4, yaw: Math.PI },
     turbine: { x: L.cx + 7.5, z: boardZ - 1.4, yaw: Math.PI },
     cooling: { x: x1 - 2.8, z: L.cz - 3.5, yaw: -Math.PI / 2 },
+    grid: { x: x0 + 2.8, z: L.cz + 6.5, yaw: Math.PI / 2 },
     annunciator: { x: L.cx, z: z1 - 2.2, yaw: Math.PI },
     trends: { x: x0 + 2.5, z: L.cz - 3.5, yaw: Math.PI / 2 },
   };

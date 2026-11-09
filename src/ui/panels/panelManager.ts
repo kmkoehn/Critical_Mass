@@ -4,7 +4,7 @@ import { PANEL_BUILDERS, type PanelContext, type PanelView } from './controlPane
 import { button, h } from './widgets';
 import './panels.css';
 
-const ORDER: PanelId[] = ['reactor', 'primary', 'turbine', 'cooling', 'annunciator', 'trends'];
+const ORDER: PanelId[] = ['reactor', 'primary', 'turbine', 'cooling', 'grid', 'annunciator', 'trends'];
 
 export class PanelManager {
   private readonly root: HTMLElement;

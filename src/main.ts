@@ -8,14 +8,16 @@ import { GameClock } from './sim/clock';
 import { Reactor, averageRodInsertion, createReactorState, reactorStatus } from './sim/reactor';
 import { Annunciator } from './sim/annunciator';
 import { TrendRecorder } from './sim/history';
-import { gridDemandMW } from './sim/grid';
+import { Grid, SUBSTATIONS } from './sim/grid';
+import { DEFAULT_ENV } from './sim/reactor';
 import { activeAlarms } from './sim/alarms';
 import { Input } from './player/input';
 import { PlayerController } from './player/controller';
 import { Interactor } from './player/interaction';
 import { World } from './world/world';
 import { DayNight } from './world/sky';
-import { BRIDGE, LOOKOUT, PLANT_LAYOUT, SPAWN, TOWN_SQUARE, zoneNameAt } from './world/layout';
+import { BRIDGE, LOOKOUT, PLANT_LAYOUT, SPAWN, TOWN_SQUARE, zoneNameAt, type SubstationId } from './world/layout';
+import type { PowerView } from './world/world';
 import type { PanelId } from './world/controlRoom';
 import { Hud, type Objective } from './ui/hud';
 import { BigMap, Minimap, renderMapImage, type MapMarker } from './ui/map';
@@ -23,7 +25,7 @@ import { reactorDebugText } from './ui/reactorDebug';
 import { PanelManager } from './ui/panels/panelManager';
 import { AlarmHorn } from './ui/audio';
 import {
-  drawAnnunciator, drawCoolingScreen, drawPrimaryScreen, drawReactorScreen, drawTrendScreen, drawTurbineScreen,
+  drawAnnunciator, drawCoolingScreen, drawGridScreen, drawPrimaryScreen, drawReactorScreen, drawTrendScreen, drawTurbineScreen,
 } from './ui/screens';
 
 const SIM_DT = 0.1;
@@ -47,6 +49,7 @@ const PANEL_LABELS: Record<PanelId, string> = {
   primary: 'Primary Loop Panel',
   turbine: 'Turbine & Grid Panel',
   cooling: 'Cooling Water Panel',
+  grid: 'Grid Dispatch Panel',
   annunciator: 'Annunciator Wall',
   trends: 'Trend Recorder',
 };
@@ -59,7 +62,20 @@ class Game {
   private readonly input: Input;
   private readonly clock = new GameClock(8);
   private reactor = new Reactor(createReactorState('cold'));
+  private readonly grid = new Grid();
   private readonly annunciator = new Annunciator();
+  private readonly power: PowerView = {
+    groupPowered: (group) => {
+      const [sub, feeder] = group.split(':');
+      return this.grid.isFeederPowered(sub as SubstationId, Number(feeder));
+    },
+    substation: (id) => {
+      const g = this.grid.state;
+      const s = g.subs[id];
+      if (!s.breakerClosed || !s.lineUp) return 'out';
+      return g.dead ? 'dead' : 'on';
+    },
+  };
   private readonly trends = new TrendRecorder();
   private readonly horn = new AlarmHorn();
   private world!: World;
@@ -128,10 +144,12 @@ class Game {
     this.interactor = new Interactor(this.world.controlRoom.interactables);
     this.panels = new PanelManager(this.hud.root, {
       reactor: () => this.reactor,
+      grid: () => this.grid,
       annunciator: this.annunciator,
       trends: this.trends,
       gameSeconds: () => this.clock.seconds,
-      demandMW: () => gridDemandMW(this.clock.hour),
+      demandMW: () => this.grid.state.demandMW,
+      activeAlarms: () => this.activeAlarmIds(),
     }, PANEL_LABELS);
     this.panels.onClose = () => this.onPanelClosed();
 
@@ -188,6 +206,19 @@ class Game {
     setTimeout(() => {
       if (this.mode === 'play' && !this.input.locked) this.setMode('paused');
     }, 400);
+  }
+
+  private activeAlarmIds(): string[] {
+    return [...this.reactor.state.alarms, ...this.grid.state.alarms];
+  }
+
+  private gridSummary(): { text: string; tone: 'ok' | 'warn' | 'bad' | 'dim' } {
+    const g = this.grid.state;
+    if (g.dead) return { text: `Grid dead · demand ${g.demandMW.toFixed(0)} MW`, tone: 'dim' };
+    const text = `Grid ${g.servedMW.toFixed(0)} / ${g.demandMW.toFixed(0)} MW · ${g.frequency.toFixed(2)} Hz`;
+    if (g.shedFraction > 0) return { text: `${text} · blackouts`, tone: 'bad' };
+    if (g.frequency > 60.5) return { text, tone: 'warn' };
+    return { text, tone: 'ok' };
   }
 
   private get insideControlRoom(): boolean {
@@ -289,10 +320,16 @@ class Game {
       this.acc += dt * warp;
       let steps = 0;
       while (this.acc >= SIM_DT && steps < 400) {
+        const dtGame = SIM_DT * this.clock.scale;
         this.clock.step(SIM_DT);
-        this.reactor.step(SIM_DT, SIM_DT * this.clock.scale);
-        this.annunciator.update(this.reactor.state.alarms);
-        this.trends.record(this.clock.seconds, this.reactor.state, gridDemandMW(this.clock.hour));
+        this.reactor.step(SIM_DT, dtGame);
+        const rs = this.reactor.state;
+        const res = this.grid.step(SIM_DT, this.clock.seconds, dtGame,
+          rs.generatorSynced ? rs.electricalOutputMW : 0, DEFAULT_ENV.ambientTemp);
+        for (const e of res.events) this.hud.toast(e.text, e.kind);
+        if (res.generatorTrip) this.reactor.generatorTrip(res.generatorTrip);
+        this.annunciator.update(this.activeAlarmIds());
+        this.trends.record(this.clock.seconds, rs, this.grid.state.demandMW);
         this.acc -= SIM_DT;
         steps++;
       }
@@ -338,7 +375,7 @@ class Game {
     this.dayNight.update(this.clock.hour, this.focus);
     const rs = this.reactor.state;
     const towerLoad = Math.min(1, rs.condenserLoadMW / 2000);
-    this.world.update(dt, this.dayNight.daylight, this.dayNight.night, towerLoad);
+    this.world.update(dt, this.dayNight.daylight, this.dayNight.night, towerLoad, this.power);
     this.updateScreens(dt);
     this.panels.update(dt);
     const severe = activeAlarms(rs).some((a) => a.severity === 'trip');
@@ -358,12 +395,14 @@ class Game {
     const warp = WARPS[this.warp];
     this.hud.update({
       time: this.clock.format() + (warp > 1 ? `  ×${warp}` : ''),
-      weather: 'Clear', zone, fps: this.fps, reactor: reactorStatus(rs),
+      weather: 'Clear', zone, fps: this.fps, reactor: reactorStatus(rs), grid: this.gridSummary(),
     });
     this.minimap.draw(p.x, p.z, this.player.yaw);
     const g = this.groups[this.groupIndex];
     const markers: MapMarker[] = g.items.map((o) => ({ x: o.x, z: o.z, label: o.text, done: o.done }));
-    this.bigMap.draw(p.x, p.z, this.player.yaw, markers);
+    const town = SUBSTATIONS.find((d) => d.id === 'town')!;
+    const darkDistricts = Array.from({ length: town.feeders }, (_, i) => i).filter((i) => !this.grid.isFeederPowered('town', i));
+    this.bigMap.draw(p.x, p.z, this.player.yaw, markers, { darkDistricts, substation: this.power.substation });
     this.cpuMs = this.cpuMs * 0.9 + (performance.now() - t0) * 0.1;
     if (this.debugVisible) {
       const info = this.renderer.info.render;
@@ -395,8 +434,9 @@ class Game {
     const s = this.reactor.state;
     drawReactorScreen(sc.reactor.ctx, s);
     drawPrimaryScreen(sc.primary.ctx, s);
-    drawTurbineScreen(sc.turbine.ctx, s, gridDemandMW(this.clock.hour));
+    drawTurbineScreen(sc.turbine.ctx, s, this.grid.state.demandMW);
     drawCoolingScreen(sc.cooling.ctx, s);
+    drawGridScreen(sc.grid.ctx, this.grid.state);
     drawTrendScreen(sc.trends.ctx, this.trends.window(this.clock.seconds, 3600), this.clock.seconds);
     const t = this.realTime;
     drawAnnunciator(sc.annunciator.ctx, this.annunciator.state, Math.floor(t * 3) % 2 === 0, Math.floor(t) % 2 === 0);
@@ -463,6 +503,13 @@ class Game {
         g.player.spawn(st.x, st.z, st.yaw);
         g.player.pitch = panel === 'annunciator' ? 0.7 : -0.12;
       },
+      /** Debug camera: switch to noclip and hover at a position. */
+      fly: (x: number, y: number, z: number, yaw: number, pitch = 0) => {
+        g.player.noclip = true;
+        Object.assign(g.player.pos, { x, y, z });
+        g.player.yaw = yaw;
+        g.player.pitch = pitch;
+      },
       openPanel: (id: PanelId) => g.openPanel(id),
       closePanel: () => g.panels.close(),
       setWarp: (n: number) => {
@@ -471,6 +518,14 @@ class Game {
       setHour: (h: number) => g.clock.setHour(h),
       toggleMap: () => g.bigMap.toggle(),
       reactor: () => g.reactor,
+      grid: () => {
+        const s = g.grid.state;
+        return {
+          dead: s.dead, hz: +s.frequency.toFixed(2), supply: Math.round(s.supplyMW), demand: Math.round(s.demandMW),
+          served: Math.round(s.servedMW), shed: +s.shedFraction.toFixed(3), alarms: s.alarms,
+          townOff: s.subs.town.feedersOff, subs: Object.fromEntries(Object.entries(s.subs).map(([k, v]) => [k, `${v.servedMW.toFixed(0)}/${v.demandMW.toFixed(0)} off:${v.feedersOff.length}`])),
+        };
+      },
       loadPlant: (preset: 'cold' | 'fullPower') => g.loadPlant(preset),
       plant: () => {
         const s = g.reactor.state;

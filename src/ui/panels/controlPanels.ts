@@ -1,6 +1,7 @@
 /** The six control-room panels. Each builds its DOM once and updates values in place. */
-import { ALARMS } from '../../sim/alarms';
-import type { Annunciator } from '../../sim/annunciator';
+import { ANNUNCIATOR_TILES, type Annunciator } from '../../sim/annunciator';
+import { GRID_CONFIG, SUBSTATIONS, type Grid } from '../../sim/grid';
+import { TOWN_DISTRICT_NAMES } from '../../world/layout';
 import { SIM_CONFIG } from '../../sim/config';
 import type { TrendRecorder, TrendSample } from '../../sim/history';
 import { TRIP_LABELS, averageRodInsertion, reactorStatus, type Reactor } from '../../sim/reactor';
@@ -11,10 +12,13 @@ import {
 
 export interface PanelContext {
   reactor(): Reactor;
+  grid(): Grid;
   annunciator: Annunciator;
   trends: TrendRecorder;
   gameSeconds(): number;
   demandMW(): number;
+  /** All active annunciator alarm ids (plant + grid). */
+  activeAlarms(): string[];
 }
 
 export interface PanelView {
@@ -436,18 +440,88 @@ function coolingPanel(ctx: PanelContext): PanelView {
   };
 }
 
+// ---------------------------------------------------------------- grid dispatch
+
+function gridPanel(ctx: PanelContext): PanelView {
+  const el = h('div', 'cp-grid cols-3');
+  const cfg = GRID_CONFIG;
+
+  const bal = section(el, 'Balance');
+  const freq = readout(bal, 'Grid frequency', 'Hz', true);
+  const fm = meter(bal, 'Frequency', 57, 63, {
+    marks: [{ at: 59.5, tone: 'warn' }, { at: 60, tone: 'info' }, { at: 60.5, tone: 'warn' }, { at: cfg.overFreqTripHz, tone: 'bad' }],
+  });
+  const gen = readout(bal, 'Generation', 'MW');
+  const dem = readout(bal, 'Demand', 'MW');
+  const served = readout(bal, 'Served', 'MW');
+  const otrip = meter(bal, 'Over-frequency trip timer', 0, cfg.overFreqDelay, { unit: 's', decimals: 1 });
+  h('div', 'cp-note', bal,
+    `Island grid: Riverbend is the only generator. Short of power, districts are blacked out in rotation every ${cfg.rotationPeriod / 60} game minutes. ` +
+    `Too much power pushes frequency up; above ${cfg.overFreqTripHz} Hz for ${cfg.overFreqDelay} s the generator breaker opens.`);
+
+  const subs = section(el, 'Substations');
+  const rows = SUBSTATIONS.map((d) => {
+    const box = h('div', 'cp-sub', subs);
+    const head = h('div', 'cp-sub-head', box);
+    const l = lamp(head, d.name);
+    const mw = h('span', 'cp-sub-mw', head);
+    const feeders = h('div', 'cp-feeders', box);
+    const dots = Array.from({ length: d.feeders }, (_, i) => {
+      const f = h('span', 'cp-feeder', feeders);
+      f.title = d.id === 'town' ? TOWN_DISTRICT_NAMES[i] : `Feeder ${i + 1}`;
+      return f;
+    });
+    return { d, l, mw, dots };
+  });
+
+  const town = section(el, 'Millbrook districts');
+  const districts = TOWN_DISTRICT_NAMES.map((n) => {
+    const r = h('div', 'cp-district', town);
+    return { l: lamp(r, n) };
+  });
+  const shedLamp = lamp(town, 'Load shedding active');
+  const rot = h('div', 'cp-note', town);
+  const unserved = readout(town, 'Unserved energy (total)', 'MWh');
+
+  return {
+    title: 'Grid Dispatch',
+    el,
+    update() {
+      const g = ctx.grid().state;
+      freq.set(g.dead ? 'DEAD' : g.frequency.toFixed(2), g.dead ? 'bad' : g.frequency > 60.5 || g.frequency < 59.5 ? 'warn' : 'ok');
+      fm.set(g.dead ? 57 : g.frequency, g.dead ? '—' : `${g.frequency.toFixed(2)} Hz`, g.frequency > cfg.overFreqTripHz ? 'bad' : 'ok');
+      gen.set(g.supplyMW.toFixed(0));
+      dem.set(g.demandMW.toFixed(0), 'warn');
+      served.set(g.servedMW.toFixed(0), g.shedFraction > 0 ? 'bad' : 'ok');
+      otrip.set(g.overFreqTimer, undefined, g.overFreqTimer > 0 ? 'bad' : 'ok');
+      for (const r of rows) {
+        const s = g.subs[r.d.id];
+        const connected = s.breakerClosed && s.lineUp;
+        r.l.set(true, !connected ? 'red' : g.dead ? 'white' : s.feedersOff.length ? 'amber' : 'green');
+        r.mw.textContent = `${s.servedMW.toFixed(0)} / ${s.demandMW.toFixed(0)} MW`;
+        r.dots.forEach((dot, i) => dot.classList.toggle('off', !ctx.grid().isFeederPowered(r.d.id, i)));
+      }
+      districts.forEach((d, i) => d.l.set(ctx.grid().isFeederPowered('town', i), 'green'));
+      shedLamp.set(!g.dead && g.shedFraction > 0, 'red');
+      const mins = Math.max(0, (g.nextRotationAt - ctx.gameSeconds()) / 60);
+      rot.textContent = g.shedFraction > 0 && !g.dead ? `Next rotation in ${mins.toFixed(0)} game min.` : '';
+      unserved.set(g.stats.unservedMWh.toFixed(0), 'dim');
+    },
+  };
+}
+
 // ---------------------------------------------------------------- annunciator
 
 function annunciatorPanel(ctx: PanelContext): PanelView {
   const el = h('div', 'cp-annun');
   const grid = h('div', 'cp-tiles', el);
-  const tiles = ALARMS.map((a) => {
+  const tiles = ANNUNCIATOR_TILES.map((a) => {
     const t = h('div', 'cp-tile', grid, a.label);
     t.dataset.sev = a.severity;
     return t;
   });
   const row = h('div', 'cp-btnrow', el);
-  button(row, 'ACKNOWLEDGE', () => ctx.annunciator.acknowledge(ctx.reactor().state.alarms), 'cp-ack');
+  button(row, 'ACKNOWLEDGE', () => ctx.annunciator.acknowledge(ctx.activeAlarms()), 'cp-ack');
   button(row, 'SILENCE HORN', () => ctx.annunciator.silence());
   button(row, 'RESET', () => ctx.annunciator.reset());
   const legend = h('div', 'cp-note', el);
@@ -460,13 +534,13 @@ function annunciatorPanel(ctx: PanelContext): PanelView {
     el,
     update() {
       const st = ctx.annunciator.state;
-      ALARMS.forEach((a, i) => {
+      ANNUNCIATOR_TILES.forEach((a, i) => {
         const s = st.tiles[a.id] ?? 'off';
         if (tiles[i].dataset.state !== s) tiles[i].dataset.state = s;
       });
-      const active = ctx.reactor().state.alarms;
+      const active = ctx.activeAlarms();
       const text = active.length
-        ? `Active: ${active.map((id) => ALARMS.find((a) => a.id === id)?.label ?? id).join(' · ')}`
+        ? `Active: ${active.map((id) => ANNUNCIATOR_TILES.find((a) => a.id === id)?.label ?? id).join(' · ')}`
         : 'No active alarms.';
       if (list.textContent !== text) list.textContent = text;
     },
@@ -529,6 +603,7 @@ export const PANEL_BUILDERS: Record<PanelId, (ctx: PanelContext) => PanelView> =
   primary: primaryPanel,
   turbine: turbinePanel,
   cooling: coolingPanel,
+  grid: gridPanel,
   annunciator: annunciatorPanel,
   trends: trendsPanel,
 };

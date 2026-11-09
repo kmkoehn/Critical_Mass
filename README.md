@@ -5,9 +5,10 @@ director of the Riverbend Generating Station, a revived plant in a river valley.
 valley, run the reactor from a real control room, keep the town of Millbrook powered, and keep
 the place from melting down.
 
-> **Status: Milestone 3 — control room.** Walk into the Unit 1 control room (the low building just
-> south of the plant road, door on its north side) and run the reactor from its panels. The
-> "Cold start: Unit 1" objectives walk you from cold shutdown to putting power on the grid.
+> **Status: Milestone 4 — grid and town.** Riverbend now feeds an island grid of four substations.
+> Run the reactor from the Unit 1 control room (the low building just south of the plant road,
+> door on its north side) and match output to demand. Fall short and Millbrook's districts go
+> dark in rolling blackouts; overshoot and grid protection disconnects you.
 > The full plan is in `nuclear-plant-game-prompt.md`.
 
 ## Run it
@@ -45,6 +46,7 @@ Six stations, each opening a panel. The panels have tabs, so you can switch betw
 | Primary Loop | Start/stop each coolant pump, flow, hot/cold leg temperatures, pressure, subcooling, inventory, pressurizer auto/manual (heaters, spray), main and auxiliary feedwater, steam generator level |
 | Turbine & Grid | Turbine speed target, synchroscope and SYNC button, governor valve (load), output vs. grid demand, turbine trip/reset, condenser vacuum, steam dumps |
 | Cooling Water | River intake pumps, cooling tower fans, condenser vacuum, heat load vs. capacity, outfall temperature |
+| Grid Dispatch | Grid frequency, generation vs. demand vs. served, every substation's feeders, Millbrook's 8 districts, the over-frequency trip timer |
 | Annunciator wall | 20 alarm tiles: they flash when new, stay steady once acknowledged, and flash slowly once cleared. Acknowledge, silence the horn, reset |
 | Trend recorder | Live charts over 10 min / 1 h / 6 h / 12 h of game time |
 
@@ -54,6 +56,31 @@ The console screens and the alarm wall also show live data in the 3D room.
 critical, then OUT 0.2), keeping the startup rate around 1 decade/min → hold about 10% power and keep
 withdrawing as the plant heats to about 285 °C → Turbine & Grid: "Set 3600 rpm", wait for the
 in-window lamp, SYNC → raise the governor valve to take load.
+
+## The grid
+
+Riverbend is the only generator on an island grid. Transmission lines run from the plant
+switchyard to four substations:
+
+| Substation | Demand |
+| --- | --- |
+| Millbrook (8 districts) | ~85 MW overnight, ~210 MW evening peak |
+| Industrial Park | ~270 MW on weekday shifts (07:00–19:00), ~55 MW otherwise |
+| Farmland | 30–55 MW |
+| City tie-line | 290–420 MW, peaking mid-morning and evening |
+
+Total demand runs from about 480 MW overnight to about 950 MW. Hot or cold weather adds more.
+
+- **Short of power:** feeders are switched off in proportion at every substation, and Millbrook's
+  districts go dark, windows and street lamps included. Which districts are dark rotates every 20
+  game minutes. The full map (M) shades the dark districts.
+- **Too much power:** grid frequency climbs. Above 61.2 Hz for 8 seconds, the generator breaker
+  opens. If you were carrying more than 500 MW, that also trips the turbine and the reactor.
+  Match output to demand with the governor valve.
+- **No generation** (for example, at the game start): the whole region is dark until you
+  synchronise.
+
+The top bar shows served/demand and frequency. The Grid Dispatch console shows everything else.
 
 ### Debug reactor shortcuts (debug panel open)
 
@@ -118,7 +145,7 @@ One in-game day lasts 20 real minutes, starting at 08:00.
 ```
 src/
   main.ts       bootstrap + game loop (fixed-step sim, variable render)
-  sim/          simulation (no rendering): clock, reactor plant model, alarms, annunciator, trends, grid demand, config
+  sim/          simulation (no rendering): clock, reactor plant model, alarms, annunciator, trends, island grid, config
   world/        layout data, terrain, river, roads, buildings, town, countryside, sky, collision
   player/       input, first-person controller, crosshair interaction
   ui/           HUD, minimap, full map, in-world screens, alarm horn, control panels (ui/panels/)

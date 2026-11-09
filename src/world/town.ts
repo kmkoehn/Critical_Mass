@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { WorldBuilder } from './builder';
 import {
   BRIDGE, RIVER_HALF_WIDTH, SCHOOL, TOWN_GRID, TOWN_HALL, TOWN_STREETS_X, TOWN_STREETS_Z, WATER_LEVEL, riverX,
+  townDistrictAt,
 } from './layout';
 import { Rng } from '../util/rng';
 
@@ -11,7 +12,8 @@ const SETBACK = 7;
 
 export interface TownHandles {
   buildingCount: number;
-  streetLightBulbs: THREE.InstancedMesh;
+  /** Street-lamp bulb material per light group ("town:<district>"). */
+  lampGroups: Map<string, THREE.MeshStandardMaterial>;
 }
 
 function overlapsCivic(x0: number, z0: number, x1: number, z1: number): boolean {
@@ -49,6 +51,7 @@ export function buildTown(b: WorldBuilder): TownHandles {
   // ---------------- civic buildings
   {
     const t = TOWN_HALL;
+    b.setLightGroup(`town:${townDistrictAt(t.cx, t.cz)}`);
     const base = b.building(t.cx, t.cz, t.w, t.d, t.h, m.shopWalls[1], m.roofDark);
     const front = t.cz - t.d / 2;
     // Portico columns on the north face, looking over the square to Main Street.
@@ -66,6 +69,7 @@ export function buildTown(b: WorldBuilder): TownHandles {
   }
   {
     const s = SCHOOL;
+    b.setLightGroup(`town:${townDistrictAt(s.cx, s.cz)}`);
     const base = b.building(s.cx, s.cz, s.w, s.d, s.h, m.shopWalls[0], m.roofDark);
     b.building(s.cx + s.w / 2 - 8, s.cz + s.d / 2 + 10, 16, 20, s.h - 2, m.shopWalls[0], m.roofDark, { baseY: base });
     // Sports field.
@@ -108,6 +112,7 @@ export function buildTown(b: WorldBuilder): TownHandles {
     const d = rng.float(10, 15);
     const cx = (lot.x0 + lot.x1) / 2 + rng.float(-1, 1);
     const cz = lot.front === 'n' ? lot.z0 + d / 2 + 1 : lot.z1 - d / 2 - 1;
+    b.setLightGroup(`town:${townDistrictAt(cx, cz)}`);
     if (lot.downtown) {
       const h = rng.float(10, 21);
       b.building(cx, cz, w + 3, d, h, rng.pick(m.shopWalls), m.roofDark);
@@ -127,22 +132,33 @@ export function buildTown(b: WorldBuilder): TownHandles {
   for (const sx of TOWN_STREETS_X) {
     for (let z = TOWN_GRID.minZ + 10; z < TOWN_GRID.maxZ; z += 34) if (Math.abs(z) > 10) lamps.push([sx + 5.5, z]);
   }
+  b.setLightGroup(null);
   const poleGeo = new THREE.CylinderGeometry(0.1, 0.14, 6, 6);
   poleGeo.translate(0, 3, 0);
   const bulbGeo = new THREE.SphereGeometry(0.35, 8, 6);
   const poles = new THREE.InstancedMesh(poleGeo, m.metalDark, lamps.length);
-  const bulbs = new THREE.InstancedMesh(bulbGeo, m.bulb, lamps.length);
   const mtx = new THREE.Matrix4();
+  // One bulb mesh (and material) per district, so each district's lamps go dark with its feeder.
+  const byDistrict = new Map<number, Array<[number, number, number]>>();
   lamps.forEach(([x, z], i) => {
     const y = b.groundY(x, z);
     mtx.makeTranslation(x, y, z);
     poles.setMatrixAt(i, mtx);
-    mtx.makeTranslation(x, y + 6, z);
-    bulbs.setMatrixAt(i, mtx);
     b.collision.addCyl(x, z, 0.15, y, y + 6);
+    const d = townDistrictAt(x, z);
+    if (!byDistrict.has(d)) byDistrict.set(d, []);
+    byDistrict.get(d)!.push([x, y + 6, z]);
   });
   poles.castShadow = true;
-  b.root.add(poles, bulbs);
+  b.root.add(poles);
+  const lampGroups = new Map<string, THREE.MeshStandardMaterial>();
+  for (const [d, list] of byDistrict) {
+    const mat = m.bulb.clone();
+    const bulbs = new THREE.InstancedMesh(bulbGeo, mat, list.length);
+    list.forEach(([x, y, z], i) => bulbs.setMatrixAt(i, mtx.makeTranslation(x, y, z)));
+    b.root.add(bulbs);
+    lampGroups.set(`town:${d}`, mat);
+  }
 
-  return { buildingCount: count, streetLightBulbs: bulbs };
+  return { buildingCount: count, lampGroups };
 }

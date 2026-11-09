@@ -1,7 +1,10 @@
 /** Pre-rendered top-down map image, the rotating minimap and the full-screen map (M). */
 import type { MapFeature } from '../world/builder';
 import type { Heightfield } from '../world/heightfield';
-import { MAP_LABELS, ROADS, SEED, WATER_LEVEL, WORLD_HALF } from '../world/layout';
+import {
+  MAP_LABELS, POWER_LINES, ROADS, SEED, SUBSTATION_SITES, TOWN_GRID, TOWN_STREETS_X, WATER_LEVEL, WORLD_HALF,
+  type SubstationId,
+} from '../world/layout';
 import { terrainColor } from '../world/terrainColor';
 import { createNoise2D } from '../util/noise';
 import { clamp } from '../util/math';
@@ -56,6 +59,16 @@ export function renderMapImage(hf: Heightfield, features: readonly MapFeature[])
     road.points.forEach(([x, z], i) => (i ? g.lineTo(toPx(x), toPx(z)) : g.moveTo(toPx(x), toPx(z))));
     g.stroke();
   }
+  // Transmission lines.
+  g.strokeStyle = 'rgba(255, 214, 90, 0.75)';
+  g.lineWidth = 1.2;
+  g.setLineDash([4, 3]);
+  for (const line of POWER_LINES) {
+    g.beginPath();
+    line.points.forEach(([x, z], i) => (i ? g.lineTo(toPx(x), toPx(z)) : g.moveTo(toPx(x), toPx(z))));
+    g.stroke();
+  }
+  g.setLineDash([]);
   for (const f of features) {
     g.fillStyle = f.color;
     if (f.kind === 'rect') {
@@ -166,7 +179,10 @@ export class BigMap {
     this.root.hidden = !this.visible;
   }
 
-  draw(x: number, z: number, yaw: number, markers: readonly MapMarker[]): void {
+  draw(
+    x: number, z: number, yaw: number, markers: readonly MapMarker[],
+    power?: { darkDistricts: readonly number[]; substation: (id: SubstationId) => 'on' | 'out' | 'dead' },
+  ): void {
     if (!this.visible) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const size = Math.floor(Math.min(window.innerWidth, window.innerHeight) * 0.84);
@@ -179,6 +195,28 @@ export class BigMap {
     g.drawImage(this.image, 0, 0, size, size);
     const k = size / (WORLD_HALF * 2);
     const P = (v: number) => (v + WORLD_HALF) * k;
+
+    if (power) {
+      // Shade Millbrook districts that are blacked out.
+      const xs = [TOWN_GRID.minX, ...TOWN_STREETS_X.slice(0, 3), TOWN_GRID.maxX];
+      g.fillStyle = 'rgba(8, 10, 30, 0.6)';
+      for (const d of power.darkDistricts) {
+        const col = d % 4;
+        const south = d >= 4;
+        const z0 = south ? 0 : TOWN_GRID.minZ;
+        const z1 = south ? TOWN_GRID.maxZ : 0;
+        g.fillRect(P(xs[col]), P(z0), (xs[col + 1] - xs[col]) * k, (z1 - z0) * k);
+      }
+      for (const id of Object.keys(SUBSTATION_SITES) as SubstationId[]) {
+        const s = SUBSTATION_SITES[id];
+        const st = power.substation(id);
+        g.fillStyle = st === 'on' ? '#49e07a' : st === 'out' ? '#ff4a36' : '#555';
+        g.strokeStyle = '#111';
+        g.lineWidth = 1.5;
+        g.fillRect(P(s.x) - 5, P(s.z) - 5, 10, 10);
+        g.strokeRect(P(s.x) - 5, P(s.z) - 5, 10, 10);
+      }
+    }
 
     g.textAlign = 'center';
     g.textBaseline = 'middle';

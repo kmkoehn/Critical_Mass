@@ -149,9 +149,18 @@
 .cp-seg-wrap { display: flex; flex-direction: column; gap: 4px; }
 .cp-seg { display: flex; gap: 4px; flex-wrap: wrap; }
 
+/* grid dispatch */
+.cp-sub { display: flex; flex-direction: column; gap: 5px; padding: 6px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.cp-sub-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.cp-sub-mw { font-family: Consolas, monospace; font-size: 13px; color: var(--lcd-ink); white-space: nowrap; }
+.cp-feeders { display: flex; gap: 4px; }
+.cp-feeder { width: 22px; height: 12px; border-radius: 2px; background: #49e07a; box-shadow: 0 0 6px rgba(73, 224, 122, 0.6); }
+.cp-feeder.off { background: #3a1712; box-shadow: none; }
+.cp-district { padding: 1px 0; }
+
 /* annunciator */
 .cp-annun { display: flex; flex-direction: column; gap: 12px; }
-.cp-tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.cp-tiles { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
 .cp-tile {
   min-height: 58px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px;
   font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; border-radius: 3px;

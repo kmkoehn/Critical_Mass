@@ -54,6 +54,10 @@ function gableGeometry(w: number, d: number, rise: number): THREE.BufferGeometry
 
 export class WorldBuilder {
   readonly features: MapFeature[] = [];
+  /** Lit window materials per light group (e.g. "town:3"), so feeders can go dark independently. */
+  readonly lightGroups = new Map<string, THREE.MeshStandardMaterial[]>();
+  private lightGroup: string | null = null;
+  private readonly clones = new Map<string, THREE.MeshStandardMaterial>();
 
   constructor(
     readonly root: THREE.Object3D,
@@ -64,6 +68,26 @@ export class WorldBuilder {
 
   groundY(x: number, z: number): number {
     return this.hf.heightAt(x, z);
+  }
+
+  /** Buildings placed after this call get their own copies of lit window materials. null = always lit. */
+  setLightGroup(group: string | null): void {
+    this.lightGroup = group;
+  }
+
+  private groupMat(m: THREE.Material): THREE.Material {
+    const g = this.lightGroup;
+    if (!g || !this.mats.litMaterials.includes(m as THREE.MeshStandardMaterial)) return m;
+    const key = `${g}|${m.uuid}`;
+    let c = this.clones.get(key);
+    if (!c) {
+      c = (m as THREE.MeshStandardMaterial).clone();
+      this.clones.set(key, c);
+      let list = this.lightGroups.get(g);
+      if (!list) this.lightGroups.set(g, (list = []));
+      list.push(c);
+    }
+    return c;
   }
 
   private finish(mesh: THREE.Mesh, opts: PlaceOpts): THREE.Mesh {
@@ -82,7 +106,8 @@ export class WorldBuilder {
     const w = maxX - minX;
     const h = maxY - minY;
     const d = maxZ - minZ;
-    const mesh = new THREE.Mesh(makeBoxGeometry(w, h, d), mat);
+    const material = Array.isArray(mat) ? mat.map((m) => this.groupMat(m)) : this.groupMat(mat);
+    const mesh = new THREE.Mesh(makeBoxGeometry(w, h, d), material);
     mesh.position.set((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
     if (opts.collide ?? true) this.collision.addBox(minX, minY, minZ, maxX, maxY, maxZ);
     const mapColor = opts.map ?? (w * d >= 30 ? MAP_BUILDING : false);

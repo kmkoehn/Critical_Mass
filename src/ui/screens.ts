@@ -2,8 +2,9 @@
  * Drawing for the in-world control-room screens (canvas textures).
  * Phosphor-style readouts: dark glass, green/amber/red text.
  */
-import { ALARMS, type Severity } from '../sim/alarms';
-import type { AnnunciatorState } from '../sim/annunciator';
+import type { Severity } from '../sim/alarms';
+import { ANNUNCIATOR_TILES, type AnnunciatorState } from '../sim/annunciator';
+import { SUBSTATIONS, type GridState } from '../sim/grid';
 import type { TrendSample } from '../sim/history';
 import { averageRodInsertion, reactorStatus, type ReactorState } from '../sim/reactor';
 
@@ -189,6 +190,32 @@ export function drawTrendScreen(g: CanvasRenderingContext2D, samples: readonly T
   g.fillText('MWe', 100, 76 + (h - 90) / 2);
 }
 
+export function drawGridScreen(g: CanvasRenderingContext2D, grid: GridState): void {
+  const { width: w, height: h } = g.canvas;
+  frame(g, w, h, 'GRID DISPATCH');
+  g.font = `700 22px ${MONO}`;
+  g.textAlign = 'right';
+  const hzBad = grid.dead || grid.frequency > 60.5 || grid.frequency < 59.5;
+  g.fillStyle = grid.dead ? C.red : hzBad ? C.amber : C.text;
+  g.fillText(grid.dead ? 'GRID DEAD' : `${grid.frequency.toFixed(2)} Hz`, w - 18, 14);
+  g.textAlign = 'left';
+  row(g, 60, 'GENERATION', `${grid.supplyMW.toFixed(0)} MW`);
+  row(g, 94, 'DEMAND', `${grid.demandMW.toFixed(0)} MW`, C.amber);
+  row(g, 128, 'SHEDDING', grid.shedFraction > 0 ? `${(grid.shedFraction * 100).toFixed(0)}%` : 'NONE', grid.shedFraction > 0 ? C.red : C.text);
+  SUBSTATIONS.forEach((d, i) => {
+    const s = grid.subs[d.id];
+    const y = 170 + i * 36;
+    g.font = `20px ${MONO}`;
+    g.fillStyle = C.dim;
+    g.fillText(d.name.toUpperCase().slice(0, 14), 18, y);
+    for (let f = 0; f < d.feeders; f++) {
+      const on = !grid.dead && s.breakerClosed && s.lineUp && !s.feedersOff.includes(f);
+      g.fillStyle = on ? C.text : '#3a1712';
+      g.fillRect(230 + f * 30, y, 22, 20);
+    }
+  });
+}
+
 const SEV_COLOR: Record<Severity, string> = { trip: '#ff3b2f', alarm: '#ffb020', warning: '#f5e8a0' };
 
 /** Annunciator tile wall. `flash` toggles ~3 Hz, `slow` ~1 Hz. */
@@ -196,12 +223,12 @@ export function drawAnnunciator(g: CanvasRenderingContext2D, ann: AnnunciatorSta
   const { width: w, height: h } = g.canvas;
   g.fillStyle = '#111416';
   g.fillRect(0, 0, w, h);
-  const cols = 10;
-  const rows = Math.ceil(ALARMS.length / cols);
+  const cols = 8;
+  const rows = Math.ceil(ANNUNCIATOR_TILES.length / cols);
   const pad = 6;
   const tw = (w - pad * (cols + 1)) / cols;
   const th = (h - pad * (rows + 1)) / rows;
-  ALARMS.forEach((a, i) => {
+  ANNUNCIATOR_TILES.forEach((a, i) => {
     const cx = pad + (i % cols) * (tw + pad);
     const cy = pad + Math.floor(i / cols) * (th + pad);
     const st = ann.tiles[a.id] ?? 'off';

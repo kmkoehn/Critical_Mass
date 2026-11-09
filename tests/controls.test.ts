@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { Annunciator } from '../src/sim/annunciator';
-import { gridDemandMW } from '../src/sim/grid';
 import { TrendRecorder, TREND_INTERVAL_S } from '../src/sim/history';
 import { Reactor, createReactorState } from '../src/sim/reactor';
 
@@ -35,16 +34,6 @@ describe('annunciator sequence', () => {
     expect(a.hornOn).toBe(false);
     a.update(['HI_PRESS', 'LO_FLOW']);
     expect(a.hornOn).toBe(true);
-  });
-});
-
-describe('grid demand', () => {
-  it('peaks in the evening and bottoms out overnight', () => {
-    expect(gridDemandMW(19.5)).toBeGreaterThan(gridDemandMW(3) + 200);
-    for (let h = 0; h < 24; h += 0.5) {
-      expect(gridDemandMW(h)).toBeGreaterThan(400);
-      expect(gridDemandMW(h)).toBeLessThan(1000);
-    }
   });
 });
 

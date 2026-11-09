@@ -47,6 +47,10 @@ html, body {
 .tb-reactor[data-status='alarm'] { background: #b8321e; color: #fff; animation: blink 0.9s steps(2, start) infinite; }
 .tb-reactor[data-status='meltdown'] { background: #5a0b0b; color: #ffb3a8; animation: blink 0.5s steps(2, start) infinite; }
 @keyframes blink { to { filter: brightness(1.6); } }
+.tb-grid { font-size: 13px; font-variant-numeric: tabular-nums; }
+.tb-grid[data-tone='dim'] { color: var(--ink-dim); }
+.tb-grid[data-tone='warn'] { color: #ffcf5a; }
+.tb-grid[data-tone='bad'] { color: #ff7a60; }
 .tb-zone { justify-self: center; text-transform: uppercase; font-weight: 600; letter-spacing: 0.12em; font-size: 13px; }
 .tb-right { justify-self: end; color: var(--ink-dim); font-variant-numeric: tabular-nums; font-size: 13px; }
 
