@@ -212,7 +212,7 @@ export class Grid {
       target = cfg.nominalHz + cfg.hzPerImbalance * Math.min(0.15, Math.max(-0.15, imbalance));
     }
     if (g.dead) g.frequency = 0;
-    else if (g.frequency < 1) g.frequency = target;
+    else if (g.frequency < 1) g.frequency = cfg.nominalHz; // energising: start at nominal and let it move
     else g.frequency += (target - g.frequency) * (1 - Math.exp(-dt / cfg.freqTau));
 
     let generatorTrip: string | null = null;

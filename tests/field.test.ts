@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Weather, createWeatherState } from '../src/sim/weather';
-import { CREW_TIMES, FaultManager, createFaultState } from '../src/sim/faults';
+import { FaultManager, createFaultState } from '../src/sim/faults';
 import { Grid, regionalDemandMW } from '../src/sim/grid';
 import { Reactor, createReactorState } from '../src/sim/reactor';
 import { Vehicle } from '../src/player/vehicle';
@@ -126,12 +126,16 @@ describe('faults', () => {
     let t = 12 * 3600;
     grid.step(DT, t, 7.2, regionalDemandMW(12), 18);
     expect(grid.state.subs.industrial.feedersOff.length).toBe(2);
-    expect(faults.dispatchCrew(f.id, t)).toBe(true);
-    for (let i = 0; i < (CREW_TIMES.travel + CREW_TIMES.repair) / 72 + 5; i++) {
+    expect(faults.dispatchCrew(f.id, t, { id: 1, name: 'Alpha Line Crew', skill: 3 })).toBe(true);
+    const sent = t;
+    while (faults.has('lineDown') && t - sent < 12 * 3600) {
       t += 72;
       faults.step(t, 72, 'clear', 0, reactor);
     }
     expect(faults.has('lineDown')).toBe(false);
+    // Travel plus ~2 h on site.
+    expect(t - sent).toBeGreaterThan(2 * 3600);
+    expect(faults.drainRepairs()).toEqual([{ kind: 'lineDown', t, by: 'crew' }]);
   });
 
   it('broken tower fans and a stuck feed valve reach the plant model', () => {

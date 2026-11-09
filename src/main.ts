@@ -12,8 +12,13 @@ import { Grid, SUBSTATIONS } from './sim/grid';
 import { activeAlarms } from './sim/alarms';
 import { WEATHER_LABEL, Weather, createWeatherState, type WeatherKind } from './sim/weather';
 import {
-  FaultManager, REPAIR_SECONDS, faultAction, faultLocation, faultPoint, faultTitle, type Fault, type FaultKind,
+  FaultManager, REPAIR_SECONDS, faultLocation, faultPoint, faultStatus, faultTitle, type Fault, type FaultKind,
 } from './sim/faults';
+import { Staff } from './sim/staff';
+import { Autopilot, type AutopilotReport } from './sim/autopilot';
+import { Management, fmtMoney } from './sim/management';
+import { Tablet } from './ui/tablet';
+import { ProtestCrowd } from './world/protest';
 import { Input } from './player/input';
 import { PlayerController } from './player/controller';
 import { Interactor } from './player/interaction';
@@ -44,7 +49,7 @@ const WARPS = [1, 4, 16];
 const DOSE_LIMIT = 50;
 const REST_HOURS = 8;
 
-type Mode = 'paused' | 'play' | 'panel';
+type Mode = 'paused' | 'play' | 'panel' | 'tablet';
 
 interface ObjectiveDef extends Objective {
   x: number;
@@ -96,6 +101,10 @@ class Game {
   private readonly grid = new Grid();
   private readonly weather = new Weather(createWeatherState(1234, 8 * 3600));
   private readonly faults = new FaultManager();
+  private readonly staff = new Staff();
+  private readonly autopilot = new Autopilot();
+  private readonly mgmt = new Management();
+  private apReport: AutopilotReport = { active: false, reason: '', events: [] };
   private readonly annunciator = new Annunciator();
   private readonly power: PowerView = {
     groupPowered: (group) => {
@@ -119,6 +128,8 @@ class Game {
   private truck!: TruckModel;
   private interactor!: Interactor;
   private panels!: PanelManager;
+  private tablet!: Tablet;
+  private protest!: ProtestCrowd;
   private minimap!: Minimap;
   private bigMap!: BigMap;
   private groups: ObjectiveGroup[] = [];
@@ -193,6 +204,7 @@ class Game {
       reactor: () => this.reactor,
       grid: () => this.grid,
       faults: () => this.faults,
+      staff: () => this.staff,
       annunciator: this.annunciator,
       trends: this.trends,
       gameSeconds: () => this.clock.seconds,
@@ -200,6 +212,17 @@ class Game {
       activeAlarms: () => this.activeAlarmIds(),
     }, PANEL_LABELS);
     this.panels.onClose = () => this.onPanelClosed();
+    this.tablet = new Tablet(this.hud.root, {
+      mgmt: this.mgmt,
+      staff: this.staff,
+      faults: this.faults,
+      grid: this.grid,
+      reactor: () => this.reactor,
+      gameSeconds: () => this.clock.seconds,
+      autopilotStatus: () => this.crewStatus(),
+    });
+    this.tablet.onClose = () => this.onPanelClosed();
+    this.protest = new ProtestCrowd(this.scene, this.world.hf);
 
     const mapImage = renderMapImage(this.world.hf, this.world.features);
     this.minimap = new Minimap(this.hud.minimapCanvas, mapImage);
@@ -225,7 +248,7 @@ class Game {
 
   private setMode(mode: Mode): void {
     this.mode = mode;
-    this.hud.setPanelMode(mode === 'panel');
+    this.hud.setPanelMode(mode === 'panel' || mode === 'tablet');
     if (mode === 'paused') {
       this.hud.showOverlay(this.started);
       return;
@@ -241,6 +264,19 @@ class Game {
     this.panels.open(id);
     this.setMode('panel');
     if (document.pointerLockElement) document.exitPointerLock();
+  }
+
+  private openTablet(): void {
+    this.repair = null;
+    this.tablet.open();
+    this.setMode('tablet');
+    if (document.pointerLockElement) document.exitPointerLock();
+  }
+
+  /** Who is minding the reactor, for the top bar and the tablet. */
+  private crewStatus(): { active: boolean; text: string } {
+    if (this.insideControlRoom || this.mode === 'panel') return { active: true, text: 'You are in the control room' };
+    return { active: this.apReport.active, text: this.apReport.reason };
   }
 
   private onPanelClosed(): void {
@@ -281,8 +317,22 @@ class Game {
     this.hud.setDriving(false);
   }
 
+  private event(kind: 'info' | 'good' | 'warn' | 'danger', text: string): void {
+    this.hud.toast(text, kind);
+    this.faults.note(this.clock.seconds, kind, text);
+  }
+
   private activeAlarmIds(): string[] {
     return [...this.reactor.state.alarms, ...this.grid.state.alarms, ...this.faults.alarms];
+  }
+
+  /** Short top-bar note on who's minding the reactor. */
+  private crewSummary(): { text: string; tone: 'ok' | 'warn' | 'bad' | 'dim' } {
+    const rs = this.reactor.state;
+    if (this.insideControlRoom || this.mode === 'panel') return { text: 'You have the controls', tone: 'dim' };
+    if (this.apReport.active) return { text: `AUTO · ${this.staff.dutyOperator?.name ?? ''}`, tone: 'ok' };
+    if (rs.generatorSynced || rs.neutronFlux > 0.01) return { text: 'Unattended', tone: 'warn' };
+    return { text: 'Plant idle', tone: 'dim' };
   }
 
   private gridSummary(): { text: string; tone: 'ok' | 'warn' | 'bad' | 'dim' } {
@@ -315,12 +365,26 @@ class Game {
     for (const e of fr.events) this.hud.toast(e.text, e.kind);
     for (const s of fr.strikes) strikes.push(s);
     this.faults.apply(this.reactor, this.grid);
+    for (const e of this.staff.step(t, dtGame, new Set(this.faults.state.faults.map((f) => f.id)))) this.event('info', e);
+    // The shift operator stands back while you're working the reactor or turbine panels.
+    const youHaveControls = this.mode === 'panel' && ['reactor', 'primary', 'turbine'].includes(this.panels.current ?? '');
+    this.apReport = this.autopilot.step(SIM_DT, this.reactor, this.grid, this.staff.state, this.staff.dutyOperator, youHaveControls);
+    for (const e of this.apReport.events) this.event('warn', e);
     this.reactor.gridHz = this.grid.state.dead ? 60 : this.grid.state.frequency;
+    this.reactor.lockout = this.mgmt.lockedOut(t)
+      ? (this.mgmt.state.regulator.licenseRevoked ? 'operating licence revoked' : 'regulator-ordered shutdown in force')
+      : null;
     this.reactor.step(SIM_DT, dtGame);
     const rs = this.reactor.state;
     const res = this.grid.step(SIM_DT, t, dtGame, rs.generatorSynced ? rs.electricalOutputMW : 0, w.ambientTemp);
     for (const e of res.events) this.hud.toast(e.text, e.kind);
     if (res.generatorTrip) this.reactor.generatorTrip(res.generatorTrip);
+    for (const e of this.mgmt.step(t, dtGame, {
+      reactor: this.reactor, grid: this.grid, faults: this.faults, staff: this.staff,
+      controlRoomStaffed: this.insideControlRoom || this.staff.dutyOperator !== null,
+      unackedAlarms: this.annunciator.unacknowledged,
+      playerDoseMSv: this.doseMSv,
+    })) this.event(e.kind, e.text);
     this.annunciator.update(this.activeAlarmIds());
     this.trends.record(t, rs, this.grid.state.demandMW);
     // Personal dose accumulates on the game clock.
@@ -480,6 +544,12 @@ class Game {
     }
 
     const [mdx, mdy] = inp.consumeMouse();
+    if (this.mode === 'tablet') {
+      if (inp.wasPressed('Tab') || inp.wasPressed('Escape')) this.tablet.close();
+      if (this.driving) this.vehicle.update(dt, { throttle: 0, steer: 0, handbrake: true });
+    } else if (this.mode === 'play' && this.resting <= 0 && inp.wasPressed('Tab')) {
+      this.openTablet();
+    }
     if (this.mode === 'play' && this.resting <= 0) {
       if (inp.wasPressed('KeyM')) this.bigMap.toggle();
       if (this.driving) {
@@ -557,8 +627,10 @@ class Game {
     this.world.update(dt, this.dayNight.daylight, this.dayNight.night, towerLoad, this.power,
       { points: faultPoints, intakeClog: rs.plantFaults.intakeClog });
     this.truck.update(this.vehicle, dt, this.dayNight.night, this.driving);
+    this.protest.update(dt, this.mgmt.state.opinion < 25);
     this.updateScreens(dt);
     this.panels.update(dt);
+    this.tablet.update(dt);
 
     // Sound.
     this.doseRate = this.computeDoseRate();
@@ -589,6 +661,10 @@ class Game {
       time: this.clock.format() + (warp > 1 ? `  ×${warp}` : ''),
       weather: `${WEATHER_LABEL[w.kind]} ${w.ambientTemp.toFixed(0)}°C`,
       zone, fps: this.fps, reactor: reactorStatus(rs), grid: this.gridSummary(),
+      crew: this.crewSummary(),
+      cash: `$${fmtMoney(this.mgmt.state.cash)}`,
+      cashTone: this.mgmt.state.cash < 0 ? 'bad' : 'ok',
+      opinion: this.mgmt.state.opinion,
     });
     this.hud.setSpeed(this.driving ? this.vehicle.speed * 3.6 : null);
     this.hud.setDosimeter(this.doseRate, this.doseMSv, DOSE_LIMIT);
@@ -599,7 +675,7 @@ class Game {
       const dir = COMPASS[Math.round(((Math.atan2(dx, -dz) / (Math.PI * 2)) * 8 + 8)) % 8];
       const dist = Math.hypot(dx, dz);
       return {
-        title: faultTitle(f), action: faultAction(f), where: dist < 30 ? 'here' : `${Math.round(dist / 10) * 10} m ${dir}`,
+        title: faultTitle(f), action: faultStatus(f), where: dist < 30 ? 'here' : `${Math.round(dist / 10) * 10} m ${dir}`,
         tone: f.kind === 'radLeak' || f.kind === 'lineDown' || f.kind === 'substationTrip' ? 'bad' : 'warn',
       };
     }));
@@ -626,7 +702,7 @@ class Game {
         `draws      ${info.calls}   tris ${(info.triangles / 1000).toFixed(0)}k`,
         `world      ${s.buildings} town bldgs, ${s.trees} trees, ${s.towers} towers, ${s.colliders} colliders`,
         `weather    ${w.kind}  ${w.ambientTemp.toFixed(1)}°C  river ${w.riverTemp.toFixed(1)}°C  cloud ${w.cloud.toFixed(2)} rain ${w.rain.toFixed(2)}`,
-        'N noclip   T +1 hour   = sim speed   O next weather   U inject fault',
+        'N noclip   T +1 hour   = sim speed   O next weather   U inject fault   I inspection now',
         '',
         reactorDebugText(rs),
       ].join('\n'));
@@ -744,6 +820,10 @@ class Game {
       this.weather.force(next, this.clock.seconds);
       this.hud.toast(`Debug: weather → ${WEATHER_LABEL[next]}`, 'warn');
     }
+    if (inp.wasPressed('KeyI')) {
+      this.mgmt.state.regulator.nextVisit = this.clock.seconds;
+      this.hud.toast('Debug: inspectors arrive now', 'warn');
+    }
     if (inp.wasPressed('KeyU')) {
       const list: Array<[FaultKind, string]> = [
         ['substationTrip', 'town'], ['intakeClog', 'intake'], ['rcpBearing', '1'], ['feedValve', 'fw3b'],
@@ -806,6 +886,18 @@ class Game {
         g.player.pitch = pitch;
       },
       openPanel: (id: PanelId) => g.openPanel(id),
+      openTablet: () => g.openTablet(),
+      closeTablet: () => g.tablet.close(),
+      company: () => {
+        const m = g.mgmt.state;
+        return {
+          cash: Math.round(m.cash), opinion: +m.opinion.toFixed(1), today: m.today, days: m.history.length,
+          contracts: m.contracts.map((c) => `${c.sub} $${c.price}`), offers: m.offers.map((o) => `${o.sub} $${o.price}`),
+          nextInspection: m.regulator.nextVisit, failures: m.regulator.failures, reports: m.regulator.reports.map((r) => `${r.score} ${r.passed ? 'pass' : 'FAIL'}: ${r.findings.join('; ')}`),
+          staff: g.staff.state.members.map((s) => `${s.name} (${s.role}, ${s.skill}★, fatigue ${s.fatigue.toFixed(2)})`),
+          duty: g.staff.dutyOperator?.name ?? null, autopilot: g.apReport.reason,
+        };
+      },
       closePanel: () => g.panels.close(),
       setWarp: (n: number) => {
         g.warp = Math.max(0, WARPS.indexOf(n));

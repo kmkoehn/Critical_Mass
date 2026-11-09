@@ -22,6 +22,9 @@ export class Hud {
   private readonly reactor: HTMLElement;
   private readonly prompt: HTMLElement;
   private readonly gridEl: HTMLElement;
+  private readonly crewEl: HTMLElement;
+  private readonly cashEl: HTMLElement;
+  private readonly opinionEl: HTMLElement;
   private readonly workOrders: HTMLElement;
   private readonly dosimeter: HTMLElement;
   private readonly speedo: HTMLElement;
@@ -53,6 +56,12 @@ export class Hud {
     this.reactor = el('span', 'tb-reactor', left);
     el('span', 'tb-sep', left);
     this.gridEl = el('span', 'tb-grid', left);
+    el('span', 'tb-sep', left);
+    this.crewEl = el('span', 'tb-crew', left);
+    const mid = el('div', 'tb-money', top);
+    this.cashEl = el('span', 'tb-cash', mid);
+    el('span', 'tb-sep', mid);
+    this.opinionEl = el('span', 'tb-opinion', mid);
     this.zone = el('div', 'tb-zone', top);
     this.fps = el('div', 'tb-right', top);
 
@@ -137,9 +146,20 @@ export class Hud {
   update(info: {
     time: string; weather: string; zone: string; fps: number; reactor: string;
     grid: { text: string; tone: 'ok' | 'warn' | 'bad' | 'dim' };
+    crew: { text: string; tone: 'ok' | 'warn' | 'bad' | 'dim' };
+    cash: string;
+    cashTone: 'ok' | 'bad';
+    opinion: number;
   }): void {
     this.set(this.gridEl, info.grid.text);
     if (this.gridEl.dataset.tone !== info.grid.tone) this.gridEl.dataset.tone = info.grid.tone;
+    this.set(this.crewEl, info.crew.text);
+    if (this.crewEl.dataset.tone !== info.crew.tone) this.crewEl.dataset.tone = info.crew.tone;
+    this.set(this.cashEl, info.cash);
+    if (this.cashEl.dataset.tone !== info.cashTone) this.cashEl.dataset.tone = info.cashTone;
+    this.set(this.opinionEl, `Opinion ${Math.round(info.opinion)}`);
+    const ot = info.opinion < 25 ? 'bad' : info.opinion < 45 ? 'warn' : 'ok';
+    if (this.opinionEl.dataset.tone !== ot) this.opinionEl.dataset.tone = ot;
     this.set(this.time, info.time);
     this.set(this.weather, info.weather);
     if (this.lastText.get(this.reactor) !== info.reactor) {
@@ -167,7 +187,8 @@ export class Hud {
 
   /** Personal dosimeter: rate in µSv/h, today's dose in mSv. */
   setDosimeter(rateUSv: number, doseMSv: number, limitMSv: number): void {
-    const show = rateUSv > 1 || doseMSv > 0.01;
+    // Background radiation is always there; only show the dosimeter when it matters.
+    const show = rateUSv > 5 || doseMSv > 0.5;
     this.dosimeter.hidden = !show;
     if (!show) return;
     const tone = doseMSv > limitMSv * 0.6 || rateUSv > 2000 ? 'bad' : rateUSv > 100 ? 'warn' : 'ok';

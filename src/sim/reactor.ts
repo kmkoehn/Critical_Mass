@@ -16,7 +16,7 @@ import { activeAlarms } from './alarms';
 
 export type TripCause =
   | 'manual' | 'highFlux' | 'startupRate' | 'highPressure' | 'lowPressure'
-  | 'lowFlow' | 'highCoreTemp' | 'lowSgLevel' | 'turbineTrip';
+  | 'lowFlow' | 'highCoreTemp' | 'lowSgLevel' | 'turbineTrip' | 'regulator';
 
 export const TRIP_LABELS: Record<TripCause, string> = {
   manual: 'manual SCRAM',
@@ -28,6 +28,7 @@ export const TRIP_LABELS: Record<TripCause, string> = {
   highCoreTemp: 'high core temperature',
   lowSgLevel: 'low steam generator level',
   turbineTrip: 'turbine trip at power',
+  regulator: 'regulator-ordered shutdown',
 };
 
 export type ReactorStatus = 'OFFLINE' | 'CRITICAL' | 'AT POWER' | 'SCRAMMED' | 'ALARM' | 'MELTDOWN';
@@ -345,6 +346,8 @@ export class Reactor {
   env: Environment;
   /** Grid frequency seen by the generator (Hz), for governor droop. Set by the caller each step. */
   gridHz = 60;
+  /** When set (e.g. a regulator-ordered shutdown), the trip can't be reset; the text says why. */
+  lockout: string | null = null;
   private events: ReactorEvent[] = [];
   private wasCritical = false;
   private wasPrompt = false;
@@ -514,6 +517,10 @@ export class Reactor {
   resetScram(): boolean {
     const s = this.state;
     if (!s.scram.active) return false;
+    if (this.lockout) {
+      this.emit('warn', `Cannot reset trip: ${this.lockout}`);
+      return false;
+    }
     if (s.rodBanks.some((x) => x < 99.9)) {
       this.emit('warn', 'Cannot reset trip: rods still inserting');
       return false;
@@ -594,9 +601,11 @@ export class Reactor {
       const dpm = (Math.log10(s.precursors / pBefore) / dt) * 60;
       s.startupRate += (dpm - s.startupRate) * approach(1.5, dt);
     }
+    // Announce criticality only on the way up from shutdown, not every time reactivity crosses zero at power.
     const critical = rho >= -0.0001 && s.neutronFlux > 1e-6;
     if (critical && !this.wasCritical && !s.scram.active) this.emit('good', 'Reactor is critical');
-    this.wasCritical = critical;
+    if (critical) this.wasCritical = true;
+    else if (s.neutronFlux < 1e-4) this.wasCritical = false;
     const prompt = rho >= k.beta;
     if (prompt && !this.wasPrompt) this.emit('danger', 'PROMPT CRITICAL EXCURSION');
     this.wasPrompt = prompt;

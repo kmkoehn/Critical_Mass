@@ -5,11 +5,11 @@ director of the Riverbend Generating Station, a revived plant in a river valley.
 valley, run the reactor from a real control room, keep the town of Millbrook powered, and keep
 the place from melting down.
 
-> **Status: Milestone 5 — field faults, weather and the truck.** Equipment around the valley now
-> breaks, storms throw lightning at substations and power lines, and you drive the utility truck
-> out to fix things in person. Run the reactor from the Unit 1 control room (the low building just
-> south of the plant road, door on its north side) and keep Millbrook's lights on.
-> The full plan is in `nuclear-plant-game-prompt.md`.
+> **Status: Milestone 6 — management layer.** Riverbend is now a business. Press **Tab** for the
+> Director's Tablet: hire shift operators to run the reactor while you're out, send crews to
+> faults, sign supply contracts, watch the books, and keep the regulator and the public on side.
+> Run the reactor yourself from the Unit 1 control room (the low building just south of the plant
+> road, door on its north side). The full plan is in `nuclear-plant-game-prompt.md`.
 
 ## Run it
 
@@ -33,6 +33,7 @@ npm run build      # type-check + production build into dist/
 | C or Ctrl | Crouch |
 | E | Use whatever the crosshair is on (control-room consoles, field equipment), get in or out of the truck |
 | W A S D (in the truck) | Drive and steer. Space is the handbrake; the mouse swings the camera |
+| Tab | Director's Tablet (management). Tab or Esc closes it |
 | M | Full-screen map |
 | Esc | Pause (releases the mouse). With a panel open, Esc (or E) closes it |
 | \` (backtick) | Debug panel. While it's open: **N** toggles noclip flying, **T** skips ahead one hour, **=** cycles simulation speed ×1 / ×4 / ×16 |
@@ -116,6 +117,41 @@ substation's gate.
 **Dosimeter.** Radiation near the fuel pad, containment and turbine hall adds to your daily dose
 (bottom left). At 50 mSv, health physics sends you off site for 8 hours of rest.
 
+## Running the company (Director's Tablet)
+
+The top bar shows your cash, public opinion, and who is minding the reactor ("You have the
+controls", "AUTO · *operator*" or "Unattended").
+
+| Tab | What's there |
+| --- | --- |
+| Overview | Cash, today's profit, loan, public opinion, reactor and grid status, **autopilot orders** (follow demand or hold a setpoint), next inspection, contracts |
+| Finances | Cash chart, today's and yesterday's profit and loss, borrow or repay in $5M steps (9% a year) |
+| Staff | Your roster (skill, wage, fatigue, what each person is doing), and applicants who change every game day |
+| Work orders | Every open fault, with a button to send the right crew |
+| Contracts | Active supply contracts with current delivery, and offers to sign |
+| Regulator | The next inspection, failures so far, and every report with its findings |
+| Log | Everything that has happened |
+
+- **Money.** Customers without a contract pay the spot price, $40–75/MWh depending on demand. Costs
+  are site overheads ($6k per game hour, even while shut down), wages, fuel ($8/MWh), repair parts,
+  environmental fines (outfall over 28°C), contract penalties and loan interest. Seven days overdrawn
+  means bankruptcy.
+- **Staff.**
+  - *Shift operators* follow demand with the governor and trim the rods while you're out of the
+    reactor and turbine panels. They stand back while you work those panels, and they never restart a
+    tripped reactor. They tire over a shift, and a rested colleague takes over automatically.
+  - *Maintenance crews* fix plant equipment; *line crews* fix substations and power lines. Both drive
+    out from the plant first, and higher skill works faster.
+  - *Security* helps at inspections.
+- **Contracts.** A fixed price and a signing bonus for promising to cover a share (95–98%) of a
+  customer's demand. Every MWh short costs a penalty. Better public opinion gets better offers.
+- **The regulator** (Office of Nuclear Safety) inspects every 2–4 game days, with 6 hours' notice,
+  starting on day 2. Pass mark 70/100. The first failure is a fine; the second is a bigger fine plus a
+  12-hour forced shutdown (the trip can't be reset); the third revokes your licence.
+- **Public opinion** (0–100) falls with blackouts, reactor trips, radiation leaks, hot outfall water
+  and failed inspections, and recovers slowly with reliable supply. Below 25, protesters gather at the
+  plant gate; below 20, the council cancels its contract and won't offer a new one.
+
 ### Debug reactor shortcuts (debug panel open)
 
 | Key | Action |
@@ -130,6 +166,7 @@ substation's gate.
 | L / K | Load the plant at full power / reset to cold shutdown |
 | O | Next weather |
 | U | Inject the next fault type (for testing) |
+| I | Inspectors arrive now |
 
 ## How the reactor works
 
@@ -181,7 +218,8 @@ One in-game day lasts 20 real minutes, starting at 08:00.
 ```
 src/
   main.ts       bootstrap + game loop (fixed-step sim, variable render)
-  sim/          simulation (no rendering): clock, reactor, alarms, annunciator, trends, island grid, weather, faults, config
+  sim/          simulation (no rendering): clock, reactor, alarms, annunciator, trends, island grid, weather, faults,
+                staff, autopilot, management (money, contracts, regulator, opinion), config
   world/        layout data, terrain, river, roads, buildings, town, countryside, grid structures, field equipment,
                 truck model, sky, rain/lightning, collision
   player/       input, first-person controller, crosshair interaction, truck physics

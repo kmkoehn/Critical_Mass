@@ -22,7 +22,14 @@ export interface Fault {
   started: number;
   /** 0..1 for faults that get worse over time. */
   progress: number;
-  crew: null | { phase: 'enroute' | 'repairing'; until: number };
+  crew: null | { staffId: number; name: string; skill: number; phase: 'enroute' | 'waiting' | 'repairing'; until: number };
+}
+
+/** A completed repair, for billing. */
+export interface RepairRecord {
+  kind: FaultKind;
+  t: number;
+  by: 'player' | 'crew';
 }
 
 export interface LogEntry {
@@ -38,6 +45,8 @@ export interface FaultState {
   rng: number;
   /** Turn random failures off (e.g. during a tutorial). Weather damage still happens. */
   randomFailures: boolean;
+  /** Completed repairs not yet billed (drained by the management model). */
+  repairs: RepairRecord[];
 }
 
 export interface Strike {
@@ -64,8 +73,21 @@ const WORSENING = { rcpBearing: 0.25, intakeClog: 0.08, intakeClogWet: 0.25, rad
 /** Lightning: share of strikes that hit a tall structure, and what a hit does. */
 const LIGHTNING = { targeted: 0.35, substationTrip: 0.6, lineDown: 0.12 };
 
-/** Line crew: travel then repair, game seconds. */
-export const CREW_TIMES = { travel: 1.5 * 3600, repair: 2 * 3600 };
+/** Crews drive from the plant at this speed (m per game second ≈ 40 km/h). */
+export const CREW_SPEED = 11;
+/** Hours a skill-3 crew needs on site. Skill 5 is ~30% faster, skill 1 ~30% slower. */
+export const CREW_REPAIR_HOURS: Record<FaultKind, number> = {
+  rcpBearing: 3, feedValve: 1, towerFan: 2, intakeClog: 1.5, substationTrip: 0.5, lineDown: 2, radLeak: 2,
+};
+/** Parts and materials, $. */
+export const REPAIR_COST: Record<FaultKind, number> = {
+  rcpBearing: 120_000, feedValve: 40_000, towerFan: 80_000, intakeClog: 15_000, substationTrip: 20_000, lineDown: 150_000, radLeak: 60_000,
+};
+/** Which kind of crew a fault needs. */
+export function crewRoleFor(kind: FaultKind): 'maintenance' | 'lineCrew' {
+  return kind === 'lineDown' || kind === 'substationTrip' ? 'lineCrew' : 'maintenance';
+}
+const CREW_BASE = { x: -385, z: -96 };
 
 export const REPAIR_SECONDS: Record<FaultKind, number> = {
   rcpBearing: 8, feedValve: 6, towerFan: 6, intakeClog: 8, substationTrip: 3, lineDown: 0, radLeak: 10,
@@ -119,9 +141,18 @@ export function faultAction(f: Fault): string {
     case 'substationTrip': return 'Reset the breaker at the substation';
     case 'radLeak': return 'Reseal the leaking cask (watch your dose)';
     case 'lineDown':
-      if (!f.crew) return 'Dispatch a line crew from Grid Dispatch';
-      return f.crew.phase === 'enroute' ? 'Line crew on the way' : 'Line crew repairing';
+      if (!f.crew) return 'Send a line crew (tablet or Grid Dispatch)';
+      break;
   }
+  return '';
+}
+
+/** Work-order text including any crew on the job. */
+export function faultStatus(f: Fault): string {
+  if (!f.crew) return faultAction(f);
+  if (f.crew.phase === 'enroute') return `${f.crew.name} on the way`;
+  if (f.crew.phase === 'waiting') return `${f.crew.name} waiting: stop RCP ${Number(f.target) + 1}`;
+  return `${f.crew.name} repairing`;
 }
 
 export const FAULT_ALARMS: ReadonlyArray<{ id: string; label: string; severity: Severity; active: (s: FaultState) => boolean }> = [
@@ -134,7 +165,7 @@ export const FAULT_ALARMS: ReadonlyArray<{ id: string; label: string; severity: 
 ];
 
 export function createFaultState(seed = 777): FaultState {
-  return { faults: [], log: [], nextId: 1, rng: seed >>> 0, randomFailures: true };
+  return { faults: [], log: [], nextId: 1, rng: seed >>> 0, randomFailures: true, repairs: [] };
 }
 
 /** Tall structures lightning prefers. */
@@ -156,6 +187,11 @@ export class FaultManager {
     const [v, s] = rand(this.state.rng);
     this.state.rng = s;
     return v;
+  }
+
+  /** Add something else (staff, money, regulator) to the shared event log. */
+  note(t: number, kind: LogEntry['kind'], text: string): void {
+    this.log(t, kind, text);
   }
 
   private log(t: number, kind: LogEntry['kind'], text: string): LogEntry {
@@ -230,12 +266,24 @@ export class FaultManager {
         f.progress = Math.min(1, f.progress + (wet ? WORSENING.intakeClogWet : WORSENING.intakeClog) * hours);
       } else if (f.kind === 'radLeak') {
         f.progress = Math.min(1, f.progress + WORSENING.radLeak * hours);
-      } else if (f.kind === 'lineDown' && f.crew && t >= f.crew.until) {
-        if (f.crew.phase === 'enroute') {
-          f.crew = { phase: 'repairing', until: t + CREW_TIMES.repair };
-          this.log(t, 'info', `Line crew on site: ${f.target} line`);
+      }
+      // Crews: travel, (wait for a pump to be stopped), repair.
+      const c = f.crew;
+      if (c && t >= c.until) {
+        if (c.phase === 'enroute' || c.phase === 'waiting') {
+          const pump = f.kind === 'rcpBearing' ? rs.coolantPumps[Number(f.target)] : null;
+          if (pump && (pump.on || pump.speed > 0.05)) {
+            if (c.phase === 'enroute') this.log(t, 'warn', `${c.name} is waiting: stop RCP ${Number(f.target) + 1} so they can work`);
+            c.phase = 'waiting';
+            c.until = t + 300;
+          } else {
+            c.phase = 'repairing';
+            c.until = t + CREW_REPAIR_HOURS[f.kind] * 3600 * (1.45 - 0.15 * c.skill);
+            this.log(t, 'info', `${c.name} on site: ${faultTitle(f)}`);
+          }
         } else {
-          this.resolve(f, t, `Line crew restored the ${f.target} line`);
+          if (f.kind === 'rcpBearing') reactor.repairPump(Number(f.target));
+          this.resolve(f, t, `${c.name} fixed: ${faultTitle(f)}`, 'crew');
         }
       }
     }
@@ -281,17 +329,28 @@ export class FaultManager {
     return null;
   }
 
-  dispatchCrew(faultId: number, t: number): boolean {
+  /** Send a crew (the caller checks they're free and the right kind). Travel time depends on distance. */
+  dispatchCrew(faultId: number, t: number, crew: { id: number; name: string; skill: number }): boolean {
     const f = this.state.faults.find((x) => x.id === faultId);
-    if (!f || f.kind !== 'lineDown' || f.crew) return false;
-    f.crew = { phase: 'enroute', until: t + CREW_TIMES.travel };
-    this.log(t, 'info', `Line crew dispatched to the ${f.target} line`);
+    if (!f || f.crew) return false;
+    const loc = faultLocation(f);
+    const travel = Math.hypot(loc.x - CREW_BASE.x, loc.z - CREW_BASE.z) / CREW_SPEED + 600;
+    f.crew = { staffId: crew.id, name: crew.name, skill: crew.skill, phase: 'enroute', until: t + travel };
+    this.log(t, 'info', `${crew.name} dispatched: ${faultTitle(f)} (≈${Math.max(1, Math.round(travel / 60))} game min away)`);
     return true;
   }
 
-  private resolve(f: Fault, t: number, text: string): void {
+  private resolve(f: Fault, t: number, text: string, by: 'player' | 'crew' = 'player'): void {
     this.state.faults = this.state.faults.filter((x) => x !== f);
+    this.state.repairs.push({ kind: f.kind, t, by });
     this.log(t, 'good', text);
+  }
+
+  /** Completed repairs since the last call (for billing). */
+  drainRepairs(): RepairRecord[] {
+    const r = this.state.repairs;
+    this.state.repairs = [];
+    return r;
   }
 
   /** Active faults fixed at a field point. */

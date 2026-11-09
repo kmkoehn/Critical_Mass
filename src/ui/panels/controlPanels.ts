@@ -2,7 +2,8 @@
 import { ANNUNCIATOR_TILES, type Annunciator } from '../../sim/annunciator';
 import { GRID_CONFIG, SUBSTATIONS, type Grid } from '../../sim/grid';
 import { TOWN_DISTRICT_NAMES } from '../../world/layout';
-import { faultAction, faultTitle, type FaultManager } from '../../sim/faults';
+import { faultStatus, faultTitle, type FaultManager } from '../../sim/faults';
+import type { Staff } from '../../sim/staff';
 
 /** "Day 2 · 14:05" from game seconds. */
 function gameTime(t: number): string {
@@ -23,6 +24,7 @@ export interface PanelContext {
   reactor(): Reactor;
   grid(): Grid;
   faults(): FaultManager;
+  staff(): Staff;
   annunciator: Annunciator;
   trends: TrendRecorder;
   gameSeconds(): number;
@@ -511,8 +513,15 @@ function gridPanel(ctx: PanelContext): PanelView {
         for (const f of lines) {
           const row = h('div', 'cp-crew', crews);
           h('div', '', row, faultTitle(f));
-          if (f.crew) h('div', 'cp-note', row, faultAction(f));
-          else button(row, 'Dispatch line crew', () => ctx.faults().dispatchCrew(f.id, ctx.gameSeconds()), 'danger');
+          if (f.crew) h('div', 'cp-note', row, faultStatus(f));
+          else {
+            button(row, 'Dispatch line crew', () => {
+              const crew = ctx.staff().availableCrew('lineCrew');
+              if (crew && ctx.faults().dispatchCrew(f.id, ctx.gameSeconds(), crew)) crew.busyWith = f.id;
+              crewKey = '';
+            }, 'danger');
+            if (!ctx.staff().availableCrew('lineCrew')) h('div', 'cp-note', row, 'No free line crew. Hire one on the Director\'s Tablet (Tab).');
+          }
         }
       }
       const g = ctx.grid().state;
