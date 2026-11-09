@@ -37,7 +37,7 @@ interface Puff {
 /** Rising steam plume above a cooling tower. `intensity` will later follow reactor output. */
 export class SteamPlume {
   private readonly puffs: Puff[] = [];
-  intensity = 1;
+  intensity = 0;
   private brightness = 1;
 
   constructor(parent: THREE.Object3D, private readonly x: number, private readonly topY: number, private readonly z: number, seed: number) {
@@ -65,8 +65,9 @@ export class SteamPlume {
       const rise = t * 75;
       // Gentle drift downwind (towards the east).
       p.sprite.position.set(this.x + p.ox + t * 40, this.topY + rise, this.z + p.oz + t * 10);
-      p.sprite.scale.setScalar(26 + t * 55);
+      p.sprite.scale.setScalar((26 + t * 55) * (0.5 + 0.5 * this.intensity));
       const mat = p.sprite.material;
+      p.sprite.visible = this.intensity > 0.01;
       mat.opacity = Math.sin(Math.PI * Math.min(1, t * 1.4)) * 0.55 * this.intensity * (t < 0.08 ? t / 0.08 : 1);
       const b = 0.35 + 0.65 * this.brightness;
       mat.color.setRGB(b, b, b * 1.02);

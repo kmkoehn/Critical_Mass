@@ -41,9 +41,11 @@ export class World {
     this.stats = { buildings: town.buildingCount, trees: country.trees, colliders: this.collision.count };
   }
 
-  update(dt: number, daylight: number, night: number): void {
+  /** `steam` 0..1: how hard the cooling towers are working (drives the plumes). */
+  update(dt: number, daylight: number, night: number, steam: number): void {
     this.water.update(dt);
     for (const p of this.plumes) {
+      p.intensity += (steam - p.intensity) * (1 - Math.exp(-dt / 4));
       p.setLight(daylight);
       p.update(dt);
     }

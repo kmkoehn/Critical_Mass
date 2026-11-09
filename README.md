@@ -5,9 +5,9 @@ director of the Riverbend Generating Station, a revived plant in a river valley.
 valley, run the reactor from a real control room, keep the town of Millbrook powered, and keep
 the place from melting down.
 
-> **Status: Milestone 1 — walkable world skeleton.** The valley, plant campus, town, roads,
-> first-person movement with collision, day/night cycle, minimap and full map are in.
-> The reactor simulation arrives in Milestone 2. The full plan is in `nuclear-plant-game-prompt.md`.
+> **Status: Milestone 2 — reactor simulation.** The walkable valley (Milestone 1) now has a
+> live reactor plant behind it. Until the control room arrives in Milestone 3, you drive the
+> reactor from the debug panel (press \`). The full plan is in `nuclear-plant-game-prompt.md`.
 
 ## Run it
 
@@ -33,6 +33,50 @@ npm run build      # type-check + production build into dist/
 | Esc | Pause (releases the mouse) |
 | \` (backtick) | Debug panel. While it's open: **N** toggles noclip flying, **T** skips ahead one hour |
 
+### Temporary reactor controls (debug panel open)
+
+| Key | Action |
+| --- | --- |
+| `[` / `]` | Insert / withdraw all rod banks 1% (hold Shift for 5%) |
+| P | Start / stop the four reactor coolant pumps |
+| `,` / `.` | Turbine speed target −/+ 300 rpm before sync; governor valve −/+ 2% after |
+| Y | Synchronise the generator to the grid (turbine must be at 3600 ±18 rpm) |
+| X | Manual SCRAM |
+| R | Reset the reactor trip (rods fully in, no trip condition), or reset a turbine trip |
+| B | Safety bypass key: disables automatic trips, aux feedwater and safety injection |
+| L / K | Load the plant at full power / reset to cold shutdown |
+
+## How the reactor works
+
+Riverbend is a simplified pressurized water reactor. It's meant to feel plausible and readable,
+not to be an engineering simulator. Fast effects (power, temperatures, pressure) run in real
+seconds. Slow ones (xenon, decay heat, fuel burnup) run on the game clock, so they play out
+over in-game hours.
+
+- **Reactivity** decides whether power rises or falls. Control rods take it away, fuel adds it, and
+  heat and xenon take it away. At exactly zero the reactor is *critical* and power holds steady.
+- **Startup.** The plant starts cold with all rods in. Start the coolant pumps, then withdraw rods
+  slowly. Power climbs by *decades* (×10 steps); the startup rate (SUR, decades per minute) tells you
+  how fast. Above 3 decades per minute at low power, the reactor trips.
+- **Heat-up.** Hotter water and fuel take reactivity away, so you keep withdrawing rods as the plant
+  warms. That same effect makes the reactor self-stabilising at power.
+- **Making electricity.** Above about 150°C the steam generators make steam. Raise the turbine
+  speed target to 3600 rpm, synchronise, then open the governor valve. Opening it draws more steam,
+  which cools the coolant, which raises reactor power by itself: the reactor follows the load.
+- **Xenon** is a neutron poison that builds up for hours after power drops. After a trip from full
+  power it peaks around 8–10 game hours later, and for a while not even pulling every rod will
+  restart the reactor. Plan around it.
+- **Decay heat** keeps coming after shutdown (about 6% of full power at first, falling over hours),
+  so the plant still needs cooling while it's off.
+- **The safety system** trips the reactor on high flux, fast startup, high or low pressure, low
+  coolant flow, high core temperature, low steam generator level, or a turbine trip at power. A
+  reactor trip also trips the turbine.
+- **Bypassing safeties** turns that off, along with auxiliary feedwater and safety injection. Lose
+  the feedwater with the bypass on and the coolant boils, the relief valve vents it, the core
+  uncovers, and the fuel eventually melts.
+
+All the tuning numbers are in `src/sim/config.ts`.
+
 ## The valley
 
 - **Riverbend Generating Station** (west bank): domed containment building, turbine hall and
@@ -52,7 +96,7 @@ One in-game day lasts 20 real minutes, starting at 08:00.
 ```
 src/
   main.ts       bootstrap + game loop (fixed-step sim, variable render)
-  sim/          simulation (no rendering): clock (reactor arrives in Milestone 2)
+  sim/          simulation (no rendering): clock, reactor plant model, alarms, config
   world/        layout data, terrain, river, roads, buildings, town, countryside, sky, collision
   player/       input, first-person controller
   ui/           HUD, minimap, full map, styles

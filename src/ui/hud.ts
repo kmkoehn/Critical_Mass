@@ -19,6 +19,7 @@ export class Hud {
   readonly bigMapCanvas: HTMLCanvasElement;
   private readonly time: HTMLElement;
   private readonly weather: HTMLElement;
+  private readonly reactor: HTMLElement;
   private readonly zone: HTMLElement;
   private readonly fps: HTMLElement;
   private readonly objectives: HTMLElement;
@@ -39,6 +40,8 @@ export class Hud {
     this.time = el('span', 'tb-time', left);
     el('span', 'tb-sep', left);
     this.weather = el('span', 'tb-weather', left);
+    el('span', 'tb-sep', left);
+    this.reactor = el('span', 'tb-reactor', left);
     this.zone = el('div', 'tb-zone', top);
     this.fps = el('div', 'tb-right', top);
 
@@ -105,9 +108,13 @@ export class Hud {
     e.textContent = text;
   }
 
-  update(info: { time: string; weather: string; zone: string; fps: number }): void {
+  update(info: { time: string; weather: string; zone: string; fps: number; reactor: string }): void {
     this.set(this.time, info.time);
     this.set(this.weather, info.weather);
+    if (this.lastText.get(this.reactor) !== info.reactor) {
+      this.reactor.dataset.status = info.reactor.toLowerCase().replace(' ', '-');
+    }
+    this.set(this.reactor, info.reactor);
     this.set(this.zone, info.zone);
     this.set(this.fps, `${Math.round(info.fps)} FPS`);
   }
@@ -121,7 +128,7 @@ export class Hud {
     this.objectives.innerHTML = html;
   }
 
-  toast(text: string, kind: 'info' | 'good' | 'warn' = 'info'): void {
+  toast(text: string, kind: 'info' | 'good' | 'warn' | 'danger' = 'info'): void {
     const t = el('div', `toast ${kind}`, this.toasts);
     t.textContent = text;
     setTimeout(() => t.classList.add('out'), 4200);

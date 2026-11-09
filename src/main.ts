@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 import './ui/style.css';
 import { GameClock } from './sim/clock';
+import { Reactor, averageRodInsertion, createReactorState, reactorStatus } from './sim/reactor';
+import { reactorDebugText } from './ui/reactorDebug';
 import { Input } from './player/input';
 import { PlayerController } from './player/controller';
 import { World } from './world/world';
@@ -28,6 +30,7 @@ class Game {
   private readonly hud: Hud;
   private readonly input: Input;
   private readonly clock = new GameClock(8);
+  private reactor = new Reactor(createReactorState('cold'));
   private world!: World;
   private dayNight!: DayNight;
   private player!: PlayerController;
@@ -135,8 +138,10 @@ class Game {
       this.acc += dt;
       while (this.acc >= SIM_DT) {
         this.clock.step(SIM_DT);
+        this.reactor.step(SIM_DT, SIM_DT * this.clock.scale);
         this.acc -= SIM_DT;
       }
+      for (const e of this.reactor.drainEvents()) this.hud.toast(e.text, e.kind);
 
       if (inp.wasPressed('KeyM')) this.bigMap.toggle();
       if (inp.wasPressed('Backquote')) this.debugVisible = !this.debugVisible;
@@ -146,6 +151,7 @@ class Game {
           this.hud.toast(`Noclip ${this.player.noclip ? 'on' : 'off'}`);
         }
         if (inp.wasPressed('KeyT')) this.clock.setHour(this.clock.hour + 1);
+        this.debugReactorKeys();
       }
 
       const [mdx, mdy] = inp.consumeMouse();
@@ -167,7 +173,9 @@ class Game {
     this.camera.rotation.set(this.player.pitch, this.player.yaw, 0);
     this.focus.set(p.x, p.y, p.z);
     this.dayNight.update(this.clock.hour, this.focus);
-    this.world.update(dt, this.dayNight.daylight, this.dayNight.night);
+    const rs = this.reactor.state;
+    const towerLoad = Math.min(1, rs.condenserLoadMW / 2000);
+    this.world.update(dt, this.dayNight.daylight, this.dayNight.night, towerLoad);
 
     this.renderer.render(this.scene, this.camera);
 
@@ -180,7 +188,7 @@ class Game {
       this.fpsTime = 0;
     }
     const zone = zoneNameAt(p.x, p.z);
-    this.hud.update({ time: this.clock.format(), weather: 'Clear', zone, fps: this.fps });
+    this.hud.update({ time: this.clock.format(), weather: 'Clear', zone, fps: this.fps, reactor: reactorStatus(rs) });
     this.minimap.draw(p.x, p.z, this.player.yaw);
     const markers: MapMarker[] = this.objectives.map((o) => ({ x: o.x, z: o.z, label: o.text, done: o.done }));
     this.bigMap.draw(p.x, p.z, this.player.yaw, markers);
@@ -195,8 +203,9 @@ class Game {
         `zone       ${zone}`,
         `draws      ${info.calls}   tris ${(info.triangles / 1000).toFixed(0)}k`,
         `world      ${s.buildings} town bldgs, ${s.trees} trees, ${s.colliders} colliders`,
-        '',
         'N noclip   T +1 hour',
+        '',
+        reactorDebugText(rs),
       ].join('\n'));
     } else {
       this.hud.setDebug(false);
@@ -218,6 +227,37 @@ class Game {
     this.hud.setObjectives('Get to know the valley', this.objectives);
   }
 
+  /** Temporary reactor controls until the control room arrives (Milestone 3). Debug panel must be open. */
+  private debugReactorKeys(): void {
+    const inp = this.input;
+    const r = this.reactor;
+    const s = r.state;
+    const big = inp.isDown('ShiftLeft') || inp.isDown('ShiftRight');
+    if (inp.wasPressed('BracketLeft')) r.nudgeRods(big ? 5 : 1);
+    if (inp.wasPressed('BracketRight')) r.nudgeRods(big ? -5 : -1);
+    if (inp.wasPressed('KeyP')) r.setAllCoolantPumps(!s.coolantPumps.some((p) => p.on));
+    if (inp.wasPressed('Comma') || inp.wasPressed('Period')) {
+      const dir = inp.wasPressed('Period') ? 1 : -1;
+      if (s.generatorSynced) r.setGovernorValve(s.governorValve + dir * (big ? 0.1 : 0.02));
+      else r.setTurbineSpeedTarget(s.turbineSpeedTarget + dir * 300);
+    }
+    if (inp.wasPressed('KeyY')) r.syncGenerator();
+    if (inp.wasPressed('KeyX')) r.scram('manual');
+    if (inp.wasPressed('KeyR')) {
+      if (s.scram.active) r.resetScram();
+      else if (s.turbineTripped) r.resetTurbine();
+    }
+    if (inp.wasPressed('KeyB')) r.setSafetyBypass(!s.safetyBypass);
+    if (inp.wasPressed('KeyL')) {
+      this.reactor = new Reactor(createReactorState('fullPower'));
+      this.hud.toast('Debug: plant loaded at full power', 'warn');
+    }
+    if (inp.wasPressed('KeyK')) {
+      this.reactor = new Reactor(createReactorState('cold'));
+      this.hud.toast('Debug: plant reset to cold shutdown', 'warn');
+    }
+  }
+
   /** Small console API for testing and debugging: window.__game. */
   private exposeDebugApi(): void {
     const g = this;
@@ -230,6 +270,19 @@ class Game {
         g.player.pitch = pitch;
       },
       setHour: (h: number) => g.clock.setHour(h),
+      reactor: () => g.reactor,
+      loadPlant: (preset: 'cold' | 'fullPower') => {
+        g.reactor = new Reactor(createReactorState(preset));
+      },
+      plant: () => {
+        const s = g.reactor.state;
+        return {
+          status: reactorStatus(s), flux: s.neutronFlux, thermalMW: Math.round(s.thermalPowerMW),
+          MWe: Math.round(s.electricalOutputMW), rods: +averageRodInsertion(s).toFixed(1),
+          coolant: +s.coolantTemp.toFixed(1), pressure: +s.primaryPressure.toFixed(2),
+          rpm: Math.round(s.turbineRPM), synced: s.generatorSynced, scram: s.scram.cause, alarms: s.alarms,
+        };
+      },
       toggleMap: () => g.bigMap.toggle(),
       state: () => ({
         pos: { ...g.player.pos },
