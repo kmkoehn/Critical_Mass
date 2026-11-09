@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { WorldBuilder, type MapFeature } from './builder';
 import { CollisionWorld } from './collision';
+import { buildControlRoom, type ControlRoomHandles } from './controlRoom';
 import { buildCountryside } from './countryside';
 import { Heightfield } from './heightfield';
 import { createMaterials, type Materials } from './materials';
@@ -17,6 +18,7 @@ export class World {
   readonly mats: Materials = createMaterials();
   readonly features: MapFeature[];
   readonly lookoutDeckY: number;
+  readonly controlRoom: ControlRoomHandles;
   readonly stats: { buildings: number; trees: number; colliders: number };
   private readonly water: Water;
   private readonly plumes: SteamPlume[];
@@ -32,6 +34,7 @@ export class World {
 
     const b = new WorldBuilder(this.root, this.hf, this.collision, this.mats);
     const plant = buildPlant(b);
+    this.controlRoom = buildControlRoom(b, plant.controlRoomFloorY);
     const town = buildTown(b);
     const country = buildCountryside(b);
     this.features = b.features;

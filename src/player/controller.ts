@@ -51,10 +51,15 @@ export class PlayerController {
 
   constructor(private readonly hf: Heightfield, private readonly col: CollisionWorld) {}
 
-  spawn(x: number, z: number, yaw: number): void {
+  /**
+   * Place the player on the highest walkable surface at or below `probeY`
+   * (default: just above the terrain, so indoors you land on the floor, not the roof).
+   */
+  spawn(x: number, z: number, yaw: number, probeY?: number): void {
+    const terrain = this.hf.heightAt(x, z);
     this.pos.x = x;
     this.pos.z = z;
-    this.pos.y = this.col.groundAt(x, z, 1e6, 0, this.hf.heightAt(x, z));
+    this.pos.y = this.col.groundAt(x, z, probeY ?? terrain + 1, 0.6, terrain);
     this.vel.x = this.vel.y = this.vel.z = 0;
     this.yaw = yaw;
     this.pitch = 0;

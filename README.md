@@ -5,9 +5,10 @@ director of the Riverbend Generating Station, a revived plant in a river valley.
 valley, run the reactor from a real control room, keep the town of Millbrook powered, and keep
 the place from melting down.
 
-> **Status: Milestone 2 — reactor simulation.** The walkable valley (Milestone 1) now has a
-> live reactor plant behind it. Until the control room arrives in Milestone 3, you drive the
-> reactor from the debug panel (press \`). The full plan is in `nuclear-plant-game-prompt.md`.
+> **Status: Milestone 3 — control room.** Walk into the Unit 1 control room (the low building just
+> south of the plant road, door on its north side) and run the reactor from its panels. The
+> "Cold start: Unit 1" objectives walk you from cold shutdown to putting power on the grid.
+> The full plan is in `nuclear-plant-game-prompt.md`.
 
 ## Run it
 
@@ -29,11 +30,32 @@ npm run build      # type-check + production build into dist/
 | Shift | Sprint |
 | Space | Jump |
 | C or Ctrl | Crouch |
+| E | Use whatever the crosshair is on (control-room consoles, alarm wall, trend recorder) |
 | M | Full-screen map |
-| Esc | Pause (releases the mouse) |
-| \` (backtick) | Debug panel. While it's open: **N** toggles noclip flying, **T** skips ahead one hour |
+| Esc | Pause (releases the mouse). With a panel open, Esc (or E) closes it |
+| \` (backtick) | Debug panel. While it's open: **N** toggles noclip flying, **T** skips ahead one hour, **=** cycles simulation speed ×1 / ×4 / ×16 |
 
-### Temporary reactor controls (debug panel open)
+## The control room
+
+Six stations, each opening a panel. The panels have tabs, so you can switch between them without walking:
+
+| Station | What it does |
+| --- | --- |
+| Reactor Control | Neutron power and flux (log scale), startup rate, reactivity breakdown, the four rod banks (sliders, plus all-bank IN/OUT/HOLD buttons), SCRAM, trip reset, safety-bypass keyswitch (asks before turning) |
+| Primary Loop | Start/stop each coolant pump, flow, hot/cold leg temperatures, pressure, subcooling, inventory, pressurizer auto/manual (heaters, spray), main and auxiliary feedwater, steam generator level |
+| Turbine & Grid | Turbine speed target, synchroscope and SYNC button, governor valve (load), output vs. grid demand, turbine trip/reset, condenser vacuum, steam dumps |
+| Cooling Water | River intake pumps, cooling tower fans, condenser vacuum, heat load vs. capacity, outfall temperature |
+| Annunciator wall | 20 alarm tiles: they flash when new, stay steady once acknowledged, and flash slowly once cleared. Acknowledge, silence the horn, reset |
+| Trend recorder | Live charts over 10 min / 1 h / 6 h / 12 h of game time |
+
+The console screens and the alarm wall also show live data in the 3D room.
+
+**Cold start in brief:** start all four coolant pumps → withdraw rods (OUT 1 while far from
+critical, then OUT 0.2), keeping the startup rate around 1 decade/min → hold about 10% power and keep
+withdrawing as the plant heats to about 285 °C → Turbine & Grid: "Set 3600 rpm", wait for the
+in-window lamp, SYNC → raise the governor valve to take load.
+
+### Debug reactor shortcuts (debug panel open)
 
 | Key | Action |
 | --- | --- |
@@ -96,10 +118,10 @@ One in-game day lasts 20 real minutes, starting at 08:00.
 ```
 src/
   main.ts       bootstrap + game loop (fixed-step sim, variable render)
-  sim/          simulation (no rendering): clock, reactor plant model, alarms, config
+  sim/          simulation (no rendering): clock, reactor plant model, alarms, annunciator, trends, grid demand, config
   world/        layout data, terrain, river, roads, buildings, town, countryside, sky, collision
-  player/       input, first-person controller
-  ui/           HUD, minimap, full map, styles
+  player/       input, first-person controller, crosshair interaction
+  ui/           HUD, minimap, full map, in-world screens, alarm horn, control panels (ui/panels/)
   util/         seeded RNG, noise, math
 tests/          Vitest unit tests
 ```

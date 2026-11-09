@@ -20,6 +20,7 @@ export class Hud {
   private readonly time: HTMLElement;
   private readonly weather: HTMLElement;
   private readonly reactor: HTMLElement;
+  private readonly prompt: HTMLElement;
   private readonly zone: HTMLElement;
   private readonly fps: HTMLElement;
   private readonly objectives: HTMLElement;
@@ -46,6 +47,8 @@ export class Hud {
     this.fps = el('div', 'tb-right', top);
 
     el('div', 'crosshair', this.root);
+    this.prompt = el('div', 'interact-prompt', this.root);
+    this.prompt.hidden = true;
 
     const mm = el('div', 'minimap', this.root);
     this.minimapCanvas = el('canvas', '', mm);
@@ -117,6 +120,17 @@ export class Hud {
     this.set(this.reactor, info.reactor);
     this.set(this.zone, info.zone);
     this.set(this.fps, `${Math.round(info.fps)} FPS`);
+  }
+
+  /** "[E] Use …" prompt under the crosshair; null hides it. */
+  setPrompt(label: string | null): void {
+    this.prompt.hidden = label === null;
+    if (label !== null) this.set(this.prompt, label);
+  }
+
+  /** Hide gameplay chrome (crosshair, prompt) while a full-screen panel is open. */
+  setPanelMode(on: boolean): void {
+    this.root.classList.toggle('panel-open', on);
   }
 
   setObjectives(title: string, list: readonly Objective[]): void {

@@ -75,6 +75,9 @@ export interface ReactorState {
   intakePumps: boolean[];
   towerFans: number;
   pressurizerAuto: boolean;
+  /** Manual pressurizer controls, used when pressurizerAuto is off. */
+  pressurizerHeaters: boolean;
+  pressurizerSpray: boolean;
   turbineSpeedTarget: number;
   /** Governor valve opening 0..1 (manual load control once synced). */
   governorValve: number;
@@ -202,6 +205,8 @@ function coldState(): ReactorState {
     intakePumps: [true, true],
     towerFans: 2,
     pressurizerAuto: true,
+    pressurizerHeaters: false,
+    pressurizerSpray: false,
     turbineSpeedTarget: 0,
     governorValve: 0,
     turbineTripped: false,
@@ -322,7 +327,7 @@ export class Reactor {
   constructor(state: ReactorState = createReactorState('cold'), env: Environment = { ...DEFAULT_ENV }) {
     this.state = state;
     this.env = env;
-    this.wasCritical = state.neutronFlux > 1e-6 && state.reactivity.total >= 0;
+    this.wasCritical = state.neutronFlux > 1e-6 && state.reactivity.total >= -10;
   }
 
   // ------------------------------------------------------------------ commands
@@ -370,6 +375,20 @@ export class Reactor {
 
   setPressurizerAuto(on: boolean): void {
     this.state.pressurizerAuto = on;
+    if (on) this.state.pressurizerHeaters = this.state.pressurizerSpray = false;
+  }
+
+  /** Manual heaters / spray (switches the pressurizer to manual). */
+  setPressurizerManual(heaters: boolean, spray: boolean): void {
+    this.state.pressurizerAuto = false;
+    this.state.pressurizerHeaters = heaters;
+    this.state.pressurizerSpray = spray;
+  }
+
+  /** Stop rod motion where the rods are now. */
+  holdRods(): void {
+    if (this.state.scram.active) return;
+    this.state.rodTargets = this.state.rodBanks.map((x) => Math.round(x * 10) / 10);
   }
 
   /** Turbine speed setpoint used before the generator is synchronised. */
@@ -620,10 +639,14 @@ export class Reactor {
     // --- primary pressure and inventory
     const pc = C.pressure;
     s.primaryPressure += pc.thermalExpansion * (s.coolantTemp - prevCoolant);
+    // Spray is driven by coolant pump head, so it needs the pumps running.
+    const sprayAvail = pumpFlow > 0.5 ? pc.sprayRate : 0;
     if (s.pressurizerAuto) {
-      const sprayAvail = pumpFlow > 0.5 ? pc.sprayRate : 0;
       const want = (pc.nominal - s.primaryPressure) / pc.controlTau;
       s.primaryPressure += Math.max(-sprayAvail, Math.min(pc.heaterRate, want)) * dt;
+    } else {
+      if (s.pressurizerHeaters) s.primaryPressure += pc.heaterRate * dt;
+      if (s.pressurizerSpray) s.primaryPressure -= sprayAvail * dt;
     }
     if (s.boiling) {
       // Boiling coolant drives pressure up towards saturation at the hot-leg temperature.

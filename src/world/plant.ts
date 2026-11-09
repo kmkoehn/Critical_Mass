@@ -113,11 +113,9 @@ export function buildPlant(b: WorldBuilder): PlantHandles {
   let controlRoomFloorY: number;
   {
     const c = L.controlRoom;
+    // Interior is furnished by controlRoom.ts.
     controlRoomFloorY = b.hollow(c.cx, c.cz, c.w, c.d, c.h, m.officeWalls, m.roofDark, m.concreteDark,
-      { side: 'n', width: 2.4, height: 3 }, { light: 25 });
-    // Placeholder control desk.
-    b.box(c.cx - 9, controlRoomFloorY, c.cz + 4, c.cx + 9, controlRoomFloorY + 1.0, c.cz + 6, m.metalDark, { map: false });
-    b.box(c.cx - 12, controlRoomFloorY, c.cz + 8.6, c.cx + 12, controlRoomFloorY + 3.2, c.cz + 9.4, m.metal, { map: false });
+      { side: 'n', width: 2.4, height: 3 }, { light: 45 });
   }
 
   // --- Cooling towers.
