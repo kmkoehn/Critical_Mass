@@ -210,8 +210,35 @@ export class BigMap {
   private readonly g: CanvasRenderingContext2D;
   visible = false;
 
+  private readonly travel: HTMLElement;
+  private travelKey = '';
+
   constructor(private readonly root: HTMLElement, private readonly canvas: HTMLCanvasElement, private readonly image: HTMLCanvasElement) {
     this.g = canvas.getContext('2d')!;
+    this.travel = document.createElement('div');
+    this.travel.className = 'bigmap-travel';
+    root.appendChild(this.travel);
+  }
+
+  /** Fast-travel destinations shown under the map (number keys pick them). null = not available now. */
+  setTravel(list: ReadonlyArray<{ name: string }> | null): void {
+    const key = list ? list.map((d) => d.name).join('|') : 'none';
+    if (key === this.travelKey) return;
+    this.travelKey = key;
+    this.travel.replaceChildren();
+    if (!list) {
+      this.travel.textContent = 'Fast travel is only available on foot.';
+      return;
+    }
+    const head = document.createElement('span');
+    head.className = 'bigmap-travel-head';
+    head.textContent = 'Fast travel';
+    this.travel.appendChild(head);
+    list.forEach((d, i) => {
+      const s = document.createElement('span');
+      s.innerHTML = `<kbd>${i + 1}</kbd> ${d.name}`;
+      this.travel.appendChild(s);
+    });
   }
 
   toggle(): void {

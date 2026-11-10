@@ -4,6 +4,7 @@ import { WorldBuilder, type MapFeature } from './builder';
 import { CollisionWorld } from './collision';
 import { buildControlRoom, type ControlRoomHandles } from './controlRoom';
 import { buildCountryside } from './countryside';
+import { Expansion, Waypoint } from './expansion';
 import { buildFieldEquipment } from './fieldEquipment';
 import { buildGridStructures } from './gridStructures';
 import { Heightfield } from './heightfield';
@@ -41,6 +42,8 @@ export class World {
   /** Everything the crosshair can interact with: control-room panels and field equipment. */
   readonly interactables: THREE.Object3D[];
   readonly stats: { buildings: number; trees: number; colliders: number; towers: number };
+  readonly expansion: Expansion;
+  readonly waypoint: Waypoint;
   private readonly water: Water;
   private readonly plumes: SteamPlume[];
   private readonly lightGroups: Map<string, THREE.MeshStandardMaterial[]>;
@@ -75,6 +78,8 @@ export class World {
     this.fieldBeacons = b.fieldBeacons;
     this.intakeDebris = field.intakeDebris;
     this.interactables = [...this.controlRoom.interactables, ...b.fieldMeshes];
+    this.expansion = new Expansion(b);
+    this.waypoint = new Waypoint(this.root);
     // Base (un-grouped) lit materials are only used by the plant, which runs on station power.
     this.alwaysLit = this.mats.litMaterials;
     this.stats = { buildings: town.buildingCount, trees: country.trees, colliders: this.collision.count, towers: grid.towerCount };

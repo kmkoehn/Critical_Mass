@@ -82,6 +82,37 @@ export class SoundFx {
     this.whineOsc.frequency.setTargetAtTime(1200 + 900 * o.whinePitch, now, 0.5);
   }
 
+  private siren: { osc: OscillatorNode; gain: GainNode; lfo: OscillatorNode } | null = null;
+
+  /** Rising-and-falling evacuation siren (meltdown). */
+  setSiren(on: boolean): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (on && !this.siren) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = 600;
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 0.25;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 260;
+      lfo.connect(lfoGain).connect(osc.frequency);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 1500;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.06;
+      osc.connect(lp).connect(gain).connect(ctx.destination);
+      osc.start();
+      lfo.start();
+      this.siren = { osc, gain, lfo };
+    } else if (!on && this.siren) {
+      this.siren.osc.stop();
+      this.siren.lfo.stop();
+      this.siren = null;
+    }
+  }
+
   /** A thunderclap after `delay` seconds (sound travels ~340 m/s). */
   thunder(delay: number, volume: number): void {
     const ctx = this.ctx;

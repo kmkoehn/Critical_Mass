@@ -19,6 +19,10 @@ import { Autopilot, type AutopilotReport } from './sim/autopilot';
 import { Management, fmtMoney } from './sim/management';
 import { Tablet } from './ui/tablet';
 import { ProtestCrowd } from './world/protest';
+import { Campaign, GAME_OVER_TEXT, TRAVEL_POINTS } from './sim/campaign';
+import { UPGRADE_BY_ID, Upgrades, type UpgradeId } from './sim/upgrades';
+import { UNIT2, Unit2 } from './sim/unit2';
+import { EndScreen, type ReportStats } from './ui/endScreen';
 import { Input } from './player/input';
 import { PlayerController } from './player/controller';
 import { Interactor } from './player/interaction';
@@ -28,13 +32,13 @@ import { DayNight } from './world/sky';
 import { TruckModel } from './world/truck';
 import { WeatherFx } from './world/weatherFx';
 import {
-  BRIDGE, FIELD_POINTS, LOOKOUT, PLANT_LAYOUT, REST_POINT, ROADS, SPAWN, TOWN_SQUARE, TRUCK_SPAWN, zoneNameAt,
+  FIELD_POINTS, PLANT_LAYOUT, REST_POINT, ROADS, SPAWN, TRUCK_SPAWN, zoneNameAt,
   type FieldPointId, type SubstationId,
 } from './world/layout';
 import type { PowerView } from './world/world';
 import type { PanelId } from './world/controlRoom';
 import { distToSegment } from './util/math';
-import { Hud, type Objective } from './ui/hud';
+import { Hud } from './ui/hud';
 import { BigMap, Minimap, renderMapImage, type MapMarker, type MapPin } from './ui/map';
 import { reactorDebugText } from './ui/reactorDebug';
 import { PanelManager } from './ui/panels/panelManager';
@@ -49,18 +53,8 @@ const WARPS = [1, 4, 16];
 const DOSE_LIMIT = 50;
 const REST_HOURS = 8;
 
-type Mode = 'paused' | 'play' | 'panel' | 'tablet';
+type Mode = 'paused' | 'play' | 'panel' | 'tablet' | 'over';
 
-interface ObjectiveDef extends Objective {
-  x: number;
-  z: number;
-  check: () => boolean;
-}
-interface ObjectiveGroup {
-  title: string;
-  items: ObjectiveDef[];
-  doneText: string;
-}
 
 const PANEL_LABELS: Record<PanelId, string> = {
   reactor: 'Reactor Control Panel',
@@ -132,8 +126,11 @@ class Game {
   private protest!: ProtestCrowd;
   private minimap!: Minimap;
   private bigMap!: BigMap;
-  private groups: ObjectiveGroup[] = [];
-  private groupIndex = 0;
+  private readonly campaign = new Campaign();
+  private readonly upgrades = new Upgrades();
+  private readonly unit2 = new Unit2();
+  private endScreen!: EndScreen;
+  private pendingWin = false;
 
   private mode: Mode = 'paused';
   private driving = false;
@@ -217,6 +214,10 @@ class Game {
       staff: this.staff,
       faults: this.faults,
       grid: this.grid,
+      upgrades: this.upgrades,
+      unit2: this.unit2,
+      act: () => this.campaign.state.act,
+      buyUpgrade: (id) => this.buyUpgrade(id),
       reactor: () => this.reactor,
       gameSeconds: () => this.clock.seconds,
       autopilotStatus: () => this.crewStatus(),
@@ -227,7 +228,7 @@ class Game {
     const mapImage = renderMapImage(this.world.hf, this.world.features);
     this.minimap = new Minimap(this.hud.minimapCanvas, mapImage);
     this.bigMap = new BigMap(this.hud.bigMapRoot, this.hud.bigMapCanvas, mapImage);
-    this.setupObjectives();
+    this.endScreen = new EndScreen(this.hud.root);
     console.info(`[world] built in ${Math.round(performance.now() - t0)} ms`, this.world.stats);
 
     this.hud.ready();
@@ -365,10 +366,15 @@ class Game {
     for (const e of fr.events) this.hud.toast(e.text, e.kind);
     for (const s of fr.strikes) strikes.push(s);
     this.faults.apply(this.reactor, this.grid);
+    for (const id of this.upgrades.step(t)) this.onUpgradeComplete(id);
+    this.applyUpgrades();
+    this.unit2.step(t, dtGame, this.grid.state.demandMW, this.reactor.state.generatorSynced);
+    this.autopilot.otherSupplyMW = this.unit2.state.outputMW;
     for (const e of this.staff.step(t, dtGame, new Set(this.faults.state.faults.map((f) => f.id)))) this.event('info', e);
     // The shift operator stands back while you're working the reactor or turbine panels.
     const youHaveControls = this.mode === 'panel' && ['reactor', 'primary', 'turbine'].includes(this.panels.current ?? '');
-    this.apReport = this.autopilot.step(SIM_DT, this.reactor, this.grid, this.staff.state, this.staff.dutyOperator, youHaveControls);
+    const hotPumps = this.faults.state.faults.filter((f) => f.kind === 'rcpBearing').map((f) => Number(f.target));
+    this.apReport = this.autopilot.step(SIM_DT, this.reactor, this.grid, this.staff.state, this.staff.dutyOperator, youHaveControls, hotPumps);
     for (const e of this.apReport.events) this.event('warn', e);
     this.reactor.gridHz = this.grid.state.dead ? 60 : this.grid.state.frequency;
     this.reactor.lockout = this.mgmt.lockedOut(t)
@@ -376,15 +382,37 @@ class Game {
       : null;
     this.reactor.step(SIM_DT, dtGame);
     const rs = this.reactor.state;
-    const res = this.grid.step(SIM_DT, t, dtGame, rs.generatorSynced ? rs.electricalOutputMW : 0, w.ambientTemp);
+    const unit1MW = rs.generatorSynced ? rs.electricalOutputMW : 0;
+    const res = this.grid.step(SIM_DT, t, dtGame, unit1MW + this.unit2.state.outputMW, w.ambientTemp);
     for (const e of res.events) this.hud.toast(e.text, e.kind);
-    if (res.generatorTrip) this.reactor.generatorTrip(res.generatorTrip);
+    if (res.generatorTrip) {
+      this.reactor.generatorTrip(res.generatorTrip);
+      if (this.unit2.state.outputMW > 0) {
+        this.unit2.trip(t);
+        this.event('warn', 'Unit 2 tripped off the grid. Its crew will restart it in about 4 hours.');
+      }
+    }
     for (const e of this.mgmt.step(t, dtGame, {
       reactor: this.reactor, grid: this.grid, faults: this.faults, staff: this.staff,
       controlRoomStaffed: this.insideControlRoom || this.staff.dutyOperator !== null,
       unackedAlarms: this.annunciator.unacknowledged,
       playerDoseMSv: this.doseMSv,
     })) this.event(e.kind, e.text);
+    // The campaign: objectives, scripted events, achievements, winning and losing.
+    const cr = this.campaign.step(this.campaignContext());
+    for (const e of cr.events) this.event(e.kind, e.text);
+    const act = cr.actions;
+    if (act.forceWeather) this.weather.force(act.forceWeather.kind, t, act.forceWeather.hours);
+    if (act.pullInspectionTo !== undefined) {
+      const reg = this.mgmt.state.regulator;
+      if (reg.nextVisit > act.pullInspectionTo) {
+        reg.nextVisit = act.pullInspectionTo;
+        reg.announced = false;
+      }
+    }
+    if (act.demandGrowth) for (const k of Object.keys(this.grid.state.scale) as SubstationId[]) this.grid.state.scale[k] *= act.demandGrowth;
+    if (act.grant) this.mgmt.state.cash += act.grant;
+    if (act.win) this.pendingWin = true;
     this.annunciator.update(this.activeAlarmIds());
     this.trends.record(t, rs, this.grid.state.demandMW);
     // Personal dose accumulates on the game clock.
@@ -436,78 +464,114 @@ class Game {
 
   // ------------------------------------------------------------------ objectives
 
-  private setupObjectives(): void {
-    const deckY = this.world.lookoutDeckY;
-    const p = () => this.player.pos;
-    const s = () => this.reactor.state;
-    const cr = PLANT_LAYOUT.controlRoom;
-    this.groups = [
-      {
-        title: 'Get to know the valley',
-        doneText: 'You know the valley. Next up: the reactor.',
-        items: [
-          {
-            id: 'bridge', text: 'Cross Riverbend Bridge', done: false, x: (BRIDGE.x0 + BRIDGE.x1) / 2, z: BRIDGE.z,
-            check: () => p().x > BRIDGE.x0 + 20 && p().x < BRIDGE.x1 - 20 && Math.abs(p().z - BRIDGE.z) < BRIDGE.halfWidth,
-          },
-          {
-            id: 'town', text: 'Visit the Millbrook town square', done: false, x: TOWN_SQUARE.x, z: TOWN_SQUARE.z,
-            check: () => Math.hypot(p().x - TOWN_SQUARE.x, p().z - TOWN_SQUARE.z) < 25,
-          },
-          {
-            id: 'lookout', text: 'Climb the Lookout Hill tower', done: false, x: LOOKOUT.x, z: LOOKOUT.z,
-            check: () => Math.hypot(p().x - LOOKOUT.x, p().z - LOOKOUT.z) < 5 && p().y > deckY - 0.4,
-          },
-        ],
-      },
-      {
-        title: 'Cold start: Unit 1',
-        doneText: 'Unit 1 is on the grid. Millbrook has power.',
-        items: [
-          { id: 'enter', text: 'Enter the control room', done: false, x: cr.cx, z: cr.cz, check: () => this.insideControlRoom },
-          {
-            id: 'pumps', text: 'Start all four reactor coolant pumps', done: false, x: cr.cx, z: cr.cz,
-            check: () => s().coolantPumps.every((pp) => pp.speed > 0.9),
-          },
-          {
-            id: 'critical', text: 'Withdraw rods slowly until the reactor is critical', done: false, x: cr.cx, z: cr.cz,
-            check: () => s().neutronFlux > 1e-5 && s().startupRate > 0.2 && !s().scram.active,
-          },
-          {
-            id: 'heat', text: 'Heat the plant to 280 °C (keep withdrawing rods)', done: false, x: cr.cx, z: cr.cz,
-            check: () => s().coolantTemp >= 280,
-          },
-          {
-            id: 'speed', text: 'Bring the turbine up to 3600 rpm', done: false, x: cr.cx, z: cr.cz,
-            check: () => Math.abs(s().turbineRPM - 3600) < 18,
-          },
-          { id: 'sync', text: 'Synchronise the generator to the grid', done: false, x: cr.cx, z: cr.cz, check: () => s().generatorSynced },
-          {
-            id: 'load', text: 'Deliver 200 MWe to the grid', done: false, x: cr.cx, z: cr.cz,
-            check: () => s().generatorSynced && s().electricalOutputMW >= 200,
-          },
-        ],
-      },
-    ];
+  /** Upgrade effects pushed into the other models (every step, so loading a save works too). */
+  private applyUpgrades(): void {
+    const u = this.upgrades;
+    this.reactor.mods = {
+      efficiency: u.has('turbineRetrofit') ? 1.06 : 1,
+      coolingMult: u.has('coolingTower3') ? 1.25 : 1,
+      strongEmergency: u.has('dieselBackup'),
+    };
+    this.faults.stormHardened = u.has('stormHardening');
+    this.autopilot.autoRods = u.has('autoRods');
+    this.mgmt.mods = {
+      opinionBaseline: u.has('visitorCentre') ? 65 : 50,
+      opinionRecovery: u.has('visitorCentre') ? 0.7 : 0.4,
+      inspectionBonus: u.has('dieselBackup') ? 5 : 0,
+      extraOverheadPerHour: this.unit2.state.built ? UNIT2.overheadPerHour : 0,
+      extraGenerationMW: this.unit2.state.outputMW,
+    };
   }
 
-  private checkObjectives(): void {
-    // Walking into the control room skips ahead to the cold start, valley tour or not.
-    if (this.groupIndex === 0 && this.insideControlRoom) this.groupIndex = 1;
-    const g = this.groups[this.groupIndex];
-    let changed = false;
-    // Steps complete in order, so later steps can't tick off early.
-    const next = g.items.find((o) => !o.done);
-    if (next && next.check()) {
-      next.done = true;
-      changed = true;
-      this.hud.toast(`Objective complete: ${next.text}`, 'good');
+  private buyUpgrade(id: UpgradeId): string | null {
+    const block = this.upgrades.blocker(id, this.mgmt.state.cash, this.campaign.state.act);
+    if (block) return block;
+    const def = UPGRADE_BY_ID[id];
+    this.mgmt.spendCapital(def.cost);
+    this.upgrades.start(id, this.clock.seconds);
+    this.event('info', `Construction started: ${def.name} (${def.hours} game hours)`);
+    return null;
+  }
+
+  private onUpgradeComplete(id: UpgradeId): void {
+    this.event('good', `Construction complete: ${UPGRADE_BY_ID[id].name}`);
+    if (id === 'unit2') {
+      this.unit2.complete(this.clock.seconds);
+      this.event('info', 'Unit 2 is commissioning and will start delivering power in a few hours.');
     }
-    if (changed && g.items.every((o) => o.done)) {
-      this.hud.toast(g.doneText, 'good');
-      if (this.groupIndex < this.groups.length - 1) this.groupIndex++;
+    if (id === 'tieLine') this.grid.state.exportScale.city = 1;
+  }
+
+  private campaignContext() {
+    const p = this.player.pos;
+    return {
+      t: this.clock.seconds,
+      player: { x: p.x, y: p.y, z: p.z, insideControlRoom: this.insideControlRoom, lookoutDeckY: this.world.lookoutDeckY },
+      reactor: this.reactor.state, grid: this.grid.state, staff: this.staff.state, mgmt: this.mgmt.state,
+      upgrades: this.upgrades.state, unit2: this.unit2.state, weather: this.weather.state,
+    };
+  }
+
+  private stats(): ReportStats {
+    const m = this.mgmt.state;
+    const passed = m.regulator.reports.filter((r) => r.passed).length;
+    return {
+      days: Math.floor(this.clock.seconds / 86400) + 1,
+      deliveredGWh: this.grid.state.stats.servedMWh / 1000,
+      cash: `$${fmtMoney(m.cash)}`,
+      opinion: m.opinion,
+      inspections: `${passed} / ${m.regulator.reports.length - passed}`,
+      trips: m.totalTrips,
+      repairs: `${m.repairsByPlayer} / ${m.repairsByCrew}`,
+      achievements: [...this.campaign.state.achievements],
+    };
+  }
+
+  private showGameOver(): void {
+    const go = this.campaign.state.gameOver!;
+    const text = GAME_OVER_TEXT[go.kind];
+    this.repair = null;
+    this.panels.close();
+    this.tablet.close();
+    this.setMode('over');
+    if (document.pointerLockElement) document.exitPointerLock();
+    if (go.kind === 'meltdown') this.sound.setSiren(true);
+    this.endScreen.show('lose', text.title, text.body, this.stats());
+  }
+
+  private showWin(): void {
+    this.setMode('over');
+    if (document.pointerLockElement) document.exitPointerLock();
+    this.endScreen.show('win', 'Riverbend is thriving',
+      'Two units on the grid, a city contract, and a valley that kept its lights on through the worst heatwave in memory. ' +
+      'The board has renewed your contract. Riverbend is yours to run for as long as you like.',
+      this.stats(), () => {
+        this.setMode('play');
+        if (!this.noLock) this.input.requestLock();
+      });
+  }
+
+  /** Fast travel: time passes as if you drove there. */
+  private fastTravel(index: number): void {
+    const dests = TRAVEL_POINTS.filter((d) => this.campaign.state.visited.includes(d.id));
+    const d = dests[index];
+    if (!d) return;
+    const p = this.player.pos;
+    const travelS = Math.max(300, Math.hypot(d.x - p.x, d.z - p.z) / 11);
+    this.bigMap.toggle();
+    this.fastForward(travelS);
+    this.player.noclip = false;
+    this.player.spawn(d.x, d.z, d.yaw);
+    this.event('info', `Travelled to ${d.name} (${Math.round(travelS / 60)} game min)`);
+  }
+
+  private updateObjectivesHud(): void {
+    const a = this.campaign.actDef;
+    if (!a) {
+      this.hud.setObjectives('Sandbox', [{ id: 'sandbox', text: 'Keep the valley powered as demand grows', done: false }]);
+      return;
     }
-    this.hud.setObjectives(g.title, g.items);
+    this.hud.setObjectives(a.title, this.campaign.objectives());
   }
 
   // ------------------------------------------------------------------ frame
@@ -518,7 +582,7 @@ class Game {
     this.last = now;
     this.realTime += dt;
     const inp = this.input;
-    const running = this.mode !== 'paused' && this.resting <= 0;
+    const running = this.mode !== 'paused' && this.mode !== 'over' && this.resting <= 0;
     let ePressed = inp.wasPressed('KeyE');
     const strikes: Array<{ x: number; z: number }> = [];
 
@@ -538,6 +602,11 @@ class Game {
       }
       for (const e of this.reactor.drainEvents()) this.hud.toast(e.text, e.kind);
       if (this.doseMSv >= DOSE_LIMIT) this.startRest();
+      if (this.campaign.state.gameOver) this.showGameOver();
+      else if (this.pendingWin) {
+        this.pendingWin = false;
+        this.showWin();
+      }
 
       if (inp.wasPressed('Backquote')) this.debugVisible = !this.debugVisible;
       if (this.debugVisible) this.debugKeys();
@@ -552,6 +621,15 @@ class Game {
     }
     if (this.mode === 'play' && this.resting <= 0) {
       if (inp.wasPressed('KeyM')) this.bigMap.toggle();
+      // Fast travel from the open map with the number keys (on foot only).
+      if (this.bigMap.visible && !this.driving) {
+        for (let i = 0; i < 9; i++) {
+          if (inp.wasPressed(`Digit${i + 1}`)) {
+            this.fastTravel(i);
+            break;
+          }
+        }
+      }
       if (this.driving) {
         this.vehicle.update(dt, {
           throttle: (inp.isDown('KeyW') || inp.isDown('ArrowUp') ? 1 : 0) - (inp.isDown('KeyS') || inp.isDown('ArrowDown') ? 1 : 0),
@@ -584,7 +662,7 @@ class Game {
         ePressed = false; // don't reopen with the same key press
       }
     }
-    if (running) this.checkObjectives();
+    this.updateObjectivesHud();
 
     // Camera: first person on foot, chase camera in the truck.
     const p = this.player.pos;
@@ -628,6 +706,17 @@ class Game {
       { points: faultPoints, intakeClog: rs.plantFaults.intakeClog });
     this.truck.update(this.vehicle, dt, this.dayNight.night, this.driving);
     this.protest.update(dt, this.mgmt.state.opinion < 25);
+    const now_ = this.clock.seconds;
+    this.world.expansion.update(dt, {
+      coolingTower3: this.upgrades.progress('coolingTower3', now_),
+      visitorCentre: this.upgrades.progress('visitorCentre', now_),
+      unit2: this.upgrades.progress('unit2', now_),
+    }, this.dayNight.daylight, this.dayNight.night, towerLoad);
+    const goal = this.campaign.current();
+    const mk = goal?.marker;
+    this.world.waypoint.update(dt, mk ? {
+      x: mk.x, z: mk.z, y: this.world.hf.heightAt(mk.x, mk.z) + (mk.y ?? 0), indoor: mk.y !== undefined,
+    } : null, mk ? Math.hypot(mk.x - p.x, mk.z - p.z) : 0);
     this.updateScreens(dt);
     this.panels.update(dt);
     this.tablet.update(dt);
@@ -685,8 +774,9 @@ class Game {
     }));
     if (!this.driving) pins.push({ x: this.vehicle.x, z: this.vehicle.z, color: '#5ab0ff', shape: 'square', label: 'Truck' });
     this.minimap.draw(p.x, p.z, this.player.yaw, pins);
-    const g = this.groups[this.groupIndex];
-    const markers: MapMarker[] = g.items.map((o) => ({ x: o.x, z: o.z, label: o.text, done: o.done }));
+    const markers: MapMarker[] = this.campaign.objectives().filter((o) => o.marker && !o.done).slice(0, 1)
+      .map((o) => ({ x: o.marker!.x, z: o.marker!.z, label: o.text, done: false }));
+    this.bigMap.setTravel(this.driving ? null : TRAVEL_POINTS.filter((d) => this.campaign.state.visited.includes(d.id)));
     const town = SUBSTATIONS.find((d) => d.id === 'town')!;
     const darkDistricts = Array.from({ length: town.feeders }, (_, i) => i).filter((i) => !this.grid.isFeederPowered('town', i));
     this.bigMap.draw(p.x, p.z, this.player.yaw, markers, { darkDistricts, substation: this.power.substation }, pins);
@@ -947,7 +1037,11 @@ class Game {
         zone: zoneNameAt(g.player.pos.x, g.player.pos.z),
         fps: Math.round(g.fps),
         time: g.clock.format(),
-        objectives: g.groups[g.groupIndex].items.map((o) => `${o.done ? '[x]' : '[ ]'} ${o.text}`),
+        act: g.campaign.state.act,
+        objectives: g.campaign.objectives().map((o) => `${o.done ? '[x]' : '[ ]'} ${o.text}`),
+        gameOver: g.campaign.state.gameOver?.kind ?? null,
+        won: g.campaign.state.won,
+        achievements: g.campaign.state.achievements,
         draws: g.renderer.info.render.calls,
       }),
     };

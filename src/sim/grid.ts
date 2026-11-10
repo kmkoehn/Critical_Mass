@@ -87,14 +87,27 @@ export interface GridState {
   supplyMW: number;
   demandMW: number;
   servedMW: number;
-  /** Fraction of connected demand being shed (0..1). */
+  /** Fraction of connected firm demand being shed (0..1). */
   shedFraction: number;
+  /** Fraction of flexible exports curtailed (0..1). */
+  exportCurtailed: number;
   dead: boolean;
   overFreqTimer: number;
   rotation: number;
   nextRotationAt: number;
   subs: Record<SubstationId, SubstationState>;
-  stats: { unservedMWh: number; townDarkDistrictHours: number };
+  /** Demand multipliers (sandbox growth). */
+  scale: Record<SubstationId, number>;
+  /**
+   * Extra, flexible export demand as a multiple of the base demand (the city tie-line expansion).
+   * Exports are curtailed first when short, without blacking anyone out.
+   */
+  exportScale: Record<SubstationId, number>;
+  stats: {
+    unservedMWh: number; townDarkDistrictHours: number; servedMWh: number;
+    /** Homes and businesses only (not flexible exports). */
+    firmServedMWh: number; firmUnservedMWh: number;
+  };
   alarms: string[];
 }
 
@@ -112,9 +125,10 @@ export function createGridState(): GridState {
     };
   }
   return {
-    frequency: 0, supplyMW: 0, demandMW: 0, servedMW: 0, shedFraction: 1, dead: true,
+    frequency: 0, supplyMW: 0, demandMW: 0, servedMW: 0, shedFraction: 1, exportCurtailed: 0, dead: true,
     overFreqTimer: 0, rotation: 0, nextRotationAt: GRID_CONFIG.rotationPeriod,
-    subs, stats: { unservedMWh: 0, townDarkDistrictHours: 0 }, alarms: [],
+    subs, scale: { town: 1, industrial: 1, farmland: 1, city: 1 }, exportScale: { town: 0, industrial: 0, farmland: 0, city: 0 },
+    stats: { unservedMWh: 0, townDarkDistrictHours: 0, servedMWh: 0, firmServedMWh: 0, firmUnservedMWh: 0 }, alarms: [],
   };
 }
 
@@ -158,21 +172,34 @@ export class Grid {
     const day = Math.floor(gameSeconds / 86400) + 1;
     g.supplyMW = supplyMW;
 
-    // Demand on connected substations.
-    let demand = 0;
+    // Demand on connected substations: firm load plus flexible exports.
+    let firm = 0;
+    let flex = 0;
+    const flexBy = {} as Record<SubstationId, number>;
     for (const d of SUBSTATIONS) {
       const s = g.subs[d.id];
-      s.demandMW = d.demand(hour, day, ambientTemp);
-      if (s.breakerClosed) demand += s.demandMW;
+      const base = d.demand(hour, day, ambientTemp);
+      const firmMW = base * g.scale[d.id];
+      flexBy[d.id] = base * g.exportScale[d.id];
+      s.demandMW = firmMW + flexBy[d.id];
+      if (s.breakerClosed) {
+        firm += firmMW;
+        flex += flexBy[d.id];
+      }
     }
+    const demand = firm + flex;
     g.demandMW = demand;
     g.dead = supplyMW <= 0.5;
 
-    // How much must be shed.
-    let shed = demand > 0 ? Math.min(1, Math.max(0, (demand - supplyMW) / demand)) : 0;
+    // Short of power: curtail exports first, then shed firm load in proportion.
+    const short = Math.max(0, demand - supplyMW);
+    const flexServedFrac = flex > 0 ? Math.max(0, 1 - short / flex) : 1;
+    const firmShort = Math.max(0, short - flex);
+    let shed = firm > 0 ? Math.min(1, firmShort / firm) : 0;
     if (shed < cfg.shedDeadband) shed = 0;
     if (g.dead) shed = 1;
     g.shedFraction = shed;
+    g.exportCurtailed = flex > 0 ? 1 - flexServedFrac : 0;
 
     // Rotate which feeders are dark.
     const rotate = gameSeconds >= g.nextRotationAt;
@@ -182,6 +209,7 @@ export class Grid {
     }
 
     let served = 0;
+    let firmServed = 0;
     for (const d of SUBSTATIONS) {
       const s = g.subs[d.id];
       // A downed line reroutes through the rest of the network at half capacity.
@@ -200,15 +228,18 @@ export class Grid {
         const offset = (g.rotation * Math.max(1, count)) % d.feeders;
         s.feedersOff = Array.from({ length: count }, (_, k) => (offset + k) % d.feeders);
       }
-      s.servedMW = connected && !g.dead ? s.demandMW * (1 - s.feedersOff.length / d.feeders) : 0;
+      const firmMW = s.demandMW - flexBy[d.id];
+      const firmPart = connected && !g.dead ? firmMW * (1 - s.feedersOff.length / d.feeders) : 0;
+      s.servedMW = firmPart + (connected && !g.dead ? flexBy[d.id] * flexServedFrac : 0);
       served += s.servedMW;
+      firmServed += firmPart;
     }
     g.servedMW = served;
 
     // Frequency.
     let target = 0;
     if (!g.dead) {
-      const imbalance = shed > 0 ? -0.01 : (supplyMW - demand) / Math.max(demand, 50);
+      const imbalance = short > 0 ? -0.01 : (supplyMW - demand) / Math.max(demand, 50);
       target = cfg.nominalHz + cfg.hzPerImbalance * Math.min(0.15, Math.max(-0.15, imbalance));
     }
     if (g.dead) g.frequency = 0;
@@ -229,6 +260,9 @@ export class Grid {
     // Stats.
     const hours = dtGame / 3600;
     g.stats.unservedMWh += Math.max(0, demand - served) * hours;
+    g.stats.servedMWh += served * hours;
+    g.stats.firmServedMWh += firmServed * hours;
+    g.stats.firmUnservedMWh += Math.max(0, firm - firmServed) * hours;
     g.stats.townDarkDistrictHours += g.subs.town.feedersOff.length * hours;
 
     // Events.

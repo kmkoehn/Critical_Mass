@@ -78,6 +78,10 @@ export const PLANT_LAYOUT = {
   admin: { cx: -385, cz: -110, w: 34, d: 20, h: 12 },
   parking: { cx: -370, cz: 45, w: 40, d: 36 },
   gate: { x: -330, z: 0 },
+  // Expansion sites (built through upgrades).
+  coolingTower3: { x: -455, z: 145, scale: 0.8 },
+  unit2: { containment: { x: -560, z: -140, r: 20, h: 38 }, hall: { cx: -505, cz: -140, w: 44, d: 28, h: 20 } },
+  visitorCentre: { cx: -296, cz: 34, w: 18, d: 12, h: 6 },
   fence: { minX: -668, maxX: -332, minZ: -183, maxZ: 183, gateHalf: 6 },
 };
 

@@ -47,7 +47,30 @@
 .tb-report { padding: 8px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.03); display: flex; flex-direction: column; gap: 3px; }
 .tb-log { max-height: 60vh; }
 
-.tb-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tb-upgrade { grid-template-columns: minmax(0, 1fr) 110px 170px 90px; }
+.tb-upgrade .cp-btn[hidden] { display: none; }
+
+/* ---------- win / game-over report */
+.end-overlay {
+  position: absolute; inset: 0; pointer-events: auto; overflow: auto; display: flex; justify-content: center; align-items: flex-start;
+  padding: 6vh 16px; background: rgba(3, 5, 8, 0.86);
+}
+.end-overlay[hidden] { display: none; }
+.end-overlay[data-kind='lose'] { background: radial-gradient(ellipse at center, rgba(70, 8, 4, 0.88), rgba(8, 2, 2, 0.95)); }
+.end-card { width: min(760px, 100%); }
+.end-kicker { font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent, #ffcf5a); font-weight: 700; }
+.end-overlay[data-kind='lose'] .end-kicker { color: #ff8a70; }
+.end-title { font-size: 52px; margin: 8px 0 10px; text-transform: uppercase; letter-spacing: 0.02em; }
+.end-body { font-size: 17px; line-height: 1.5; color: #d6d2c6; margin: 0 0 22px; }
+.end-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 22px; }
+.end-stat { background: rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 10px 12px; }
+.end-stat-v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.end-stat-l { font-size: 12px; color: #9aa7b2; margin-top: 2px; }
+.end-sub { font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: #9aa7b2; margin: 0 0 8px; }
+.end-ach { display: flex; flex-direction: column; gap: 4px; margin-bottom: 22px; font-size: 14px; }
+.end-ach-row { display: flex; gap: 10px; color: #7d878f; }
+.end-ach-row.got { color: #ffe08a; }
+.end-buttons .cp-btn { font-size: 14px; padding: 11px 18px; }
 .tb-table th { text-align: right; color: #9aa7b2; font-weight: 600; padding: 4px 6px; }
 .tb-table th:first-child { text-align: left; }
 .tb-table td { padding: 4px 6px; border-top: 1px solid rgba(255, 255, 255, 0.05); }

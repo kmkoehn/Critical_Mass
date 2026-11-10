@@ -74,11 +74,12 @@ export class Weather {
     return v;
   }
 
-  /** Switch weather now (debug / scripted events). */
-  force(kind: WeatherKind, gameSeconds: number): void {
+  /** Switch weather now (debug / scripted events), optionally for a fixed number of hours. */
+  force(kind: WeatherKind, gameSeconds: number, hours?: number): void {
     const def = KINDS[kind];
     this.state.kind = kind;
-    this.state.nextChangeAt = gameSeconds + 3600 * (def.hours[0] + this.random() * (def.hours[1] - def.hours[0]));
+    const h = hours ?? def.hours[0] + this.random() * (def.hours[1] - def.hours[0]);
+    this.state.nextChangeAt = gameSeconds + 3600 * h;
   }
 
   /** Advance; returns how many lightning strikes happen this step. */

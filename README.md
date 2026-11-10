@@ -5,11 +5,10 @@ director of the Riverbend Generating Station, a revived plant in a river valley.
 valley, run the reactor from a real control room, keep the town of Millbrook powered, and keep
 the place from melting down.
 
-> **Status: Milestone 6 — management layer.** Riverbend is now a business. Press **Tab** for the
-> Director's Tablet: hire shift operators to run the reactor while you're out, send crews to
-> faults, sign supply contracts, watch the books, and keep the regulator and the public on side.
-> Run the reactor yourself from the Unit 1 control room (the low building just south of the plant
-> road, door on its north side). The full plan is in `nuclear-plant-game-prompt.md`.
+> **Status: Milestone 7 — progression.** A full campaign: a guided cold start (Act 1), building a
+> team and riding out the first storm (Act 2), and expanding with Unit 2 through a heatwave (Act 3),
+> then an open-ended sandbox. Upgrades, achievements, fast travel, and three ways to lose.
+> The full plan is in `nuclear-plant-game-prompt.md`.
 
 ## Run it
 
@@ -34,9 +33,42 @@ npm run build      # type-check + production build into dist/
 | E | Use whatever the crosshair is on (control-room consoles, field equipment), get in or out of the truck |
 | W A S D (in the truck) | Drive and steer. Space is the handbrake; the mouse swings the camera |
 | Tab | Director's Tablet (management). Tab or Esc closes it |
-| M | Full-screen map |
+| M | Full-screen map. On foot, number keys **1–9** fast-travel to places you've already visited (game time passes as if you drove) |
 | Esc | Pause (releases the mouse). With a panel open, Esc (or E) closes it |
 | \` (backtick) | Debug panel. While it's open: **N** toggles noclip flying, **T** skips ahead one hour, **=** cycles simulation speed ×1 / ×4 / ×16 |
+
+## The campaign
+
+The objective box (bottom right) shows the current act. The current step has a hint, and a yellow
+waypoint beacon in the world marks where to go.
+
+| Act | Goals |
+| --- | --- |
+| 1 · Cold Start | Walk to the control room → start the pumps → reach criticality → heat to 280°C → turbine to 3600 rpm → sync → power every district of Millbrook. These steps unlock in order, like a tutorial |
+| 2 · Keeping the Lights On | Hire a shift operator and a crew, sign the Industrial Park contract, ride out a scripted thunderstorm, pass an inspection (it's brought forward), close a day in profit |
+| 3 · Expansion | Opens with a $15M development grant (loans of up to $30M cover the rest). Complete two upgrades, expand the city tie-line, build and start Unit 2, sign the City Grid Authority contract, then keep at least 97% of homes and businesses supplied through a 24-hour heatwave |
+
+Finishing Act 3 wins the game and shows a final report. You can keep playing in the **sandbox**,
+where demand grows 2% a day.
+
+**You lose** if the core melts (with evacuation sirens), you go bankrupt (7 days overdrawn), or the
+regulator revokes your licence (3 failed inspections).
+
+**Upgrades** (Tablet → Upgrades) take game hours to build, and you can watch them rise on site:
+
+| Upgrade | Cost | Build time | Effect |
+| --- | --- | --- | --- |
+| Turbine retrofit | $5M | 24 h | About 6% more electricity |
+| Third cooling tower | $7M | 48 h | +25% cooling capacity (and needed for Unit 2) |
+| Emergency diesel generators | $4M | 12 h | Stronger auxiliary feedwater and safety injection, +5 at inspections |
+| Automatic rod control | $5M | 18 h | Holds coolant temperature on program whenever you're on the grid |
+| Storm-hardened lines | $8M | 36 h | Lightning does a quarter of the damage |
+| Visitor centre | $3M | 24 h | Public opinion settles higher and recovers faster |
+| City tie-line expansion (Act 3) | $8M | 36 h | The city will buy up to twice as much. Those exports are cut first, without blackouts, when you're short |
+| Unit 2 (Act 3) | $20M | 96 h | A second 950 MWe unit with its own crew, running at a base-load setpoint you choose. Unit 1 covers the rest |
+
+**Achievements:** Local knowledge, Hands on, Storm chaser, Clean record, Steady hand
+(30 days without a trip), Tycoon ($50M) and Never caused a blackout.
 
 ## The control room
 
@@ -219,7 +251,7 @@ One in-game day lasts 20 real minutes, starting at 08:00.
 src/
   main.ts       bootstrap + game loop (fixed-step sim, variable render)
   sim/          simulation (no rendering): clock, reactor, alarms, annunciator, trends, island grid, weather, faults,
-                staff, autopilot, management (money, contracts, regulator, opinion), config
+                staff, autopilot, management (money, contracts, regulator, opinion), upgrades, Unit 2, campaign, config
   world/        layout data, terrain, river, roads, buildings, town, countryside, grid structures, field equipment,
                 truck model, sky, rain/lightning, collision
   player/       input, first-person controller, crosshair interaction, truck physics

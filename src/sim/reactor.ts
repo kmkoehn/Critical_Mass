@@ -348,6 +348,8 @@ export class Reactor {
   gridHz = 60;
   /** When set (e.g. a regulator-ordered shutdown), the trip can't be reset; the text says why. */
   lockout: string | null = null;
+  /** Plant upgrades that change the physics. */
+  mods = { efficiency: 1, coolingMult: 1, strongEmergency: false };
   private events: ReactorEvent[] = [];
   private wasCritical = false;
   private wasPrompt = false;
@@ -686,7 +688,7 @@ export class Reactor {
     const mainCap = s.feedPumps.filter(Boolean).length * fw.pumpCapacity * (s.plantFaults.feedValveStuck ? 0.7 : 1);
     s.auxFeedRunning = s.auxFeed === 'on' ||
       (s.auxFeed === 'auto' && !s.safetyBypass && (s.steamGeneratorLevel < fw.auxStartLevel || (s.auxFeedRunning && s.steamGeneratorLevel < fw.nominalLevel)));
-    const feedCap = mainCap + (s.auxFeedRunning ? fw.auxCapacity : 0);
+    const feedCap = mainCap + (s.auxFeedRunning ? fw.auxCapacity * (this.mods.strongEmergency ? 2.5 : 1) : 0);
     const feed = Math.min(feedCap, Math.max(0, steamFrac + 0.02 * (fw.nominalLevel - s.steamGeneratorLevel)));
     s.steamGeneratorLevel = Math.min(100, Math.max(0, s.steamGeneratorLevel + (feed - steamFrac) * fw.levelGain * dt));
 
@@ -740,7 +742,7 @@ export class Reactor {
     if (siWanted && !s.safetyInjection) this.emit('warn', 'Safety injection actuated');
     s.safetyInjection = siWanted || (s.safetyInjection && !s.safetyBypass && s.primaryInventory < 99);
     if (s.safetyInjection) {
-      s.primaryInventory += pc.safetyInjectionRate * dt;
+      s.primaryInventory += pc.safetyInjectionRate * (this.mods.strongEmergency ? 2 : 1) * dt;
       s.coolantTemp -= 0.5 * dt; // cold borated water
     }
     s.primaryInventory = Math.min(100, Math.max(0, s.primaryInventory));
@@ -749,9 +751,9 @@ export class Reactor {
 
     // --- turbine-generator
     const cc = C.cooling;
-    s.coolingCapacityMW = coolingCapacity(s, env);
+    s.coolingCapacityMW = coolingCapacity(s, env) * this.mods.coolingMult;
     const vacFactor = 0.9 + 0.1 * (s.condenserVacuum / 100);
-    const pMech = qTurb * tb.efficiency * vacFactor;
+    const pMech = qTurb * tb.efficiency * vacFactor * this.mods.efficiency;
     if (s.generatorSynced) {
       s.turbineRPM = tb.syncRpm;
       s.electricalOutputMW = Math.max(0, pMech - tb.lossesMW);

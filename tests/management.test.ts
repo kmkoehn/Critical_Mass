@@ -88,6 +88,25 @@ describe('shift-operator autopilot', () => {
     expect(p.grid.state.frequency).toBeLessThan(60.6);
   });
 
+  it('handles a hot RCP bearing: derates, stops the pump for the crew, restarts it after', () => {
+    const p = plant('fullPower', 13);
+    p.hireBest('operator');
+    const crew = p.hireBest('maintenance');
+    const f = p.faults.inject('rcpBearing', '1', p.t)!;
+    p.faults.dispatchCrew(f.id, p.t, crew);
+    crew.busyWith = f.id;
+    // Same wiring as the game: the autopilot is told which pumps have hot bearings.
+    const ap = p.autopilot;
+    const orig = ap.step.bind(ap);
+    ap.step = (dt, r, g, s, op, sus) => orig(dt, r, g, s, op, sus, p.faults.state.faults.filter((x) => x.kind === 'rcpBearing').map((x) => Number(x.target)));
+    p.runHours(8);
+    expect(p.reactor.state.scram.active).toBe(false);
+    expect(p.events.some((e) => /stopped RCP 2/.test(e))).toBe(true);
+    expect(p.faults.has('rcpBearing')).toBe(false);
+    expect(p.events.some((e) => /restarted RCP 2/.test(e))).toBe(true);
+    expect(p.reactor.state.coolantPumps[1].on).toBe(true);
+  });
+
   it('stands back while the player has the controls', () => {
     const p = plant('fullPower', 13);
     p.hireBest('operator');
@@ -150,8 +169,15 @@ describe('finances', () => {
 });
 
 describe('public opinion', () => {
+  it('ignores the years-long darkness before the first start-up', () => {
+    const p = plant('cold', 18);
+    p.runHours(12);
+    expect(p.mgmt.state.opinion).toBeGreaterThan(50);
+  });
+
   it('falls during blackouts and recovers with reliable supply', () => {
     const p = plant('cold', 18);
+    p.mgmt.state.everEnergized = true; // Riverbend has powered the town before
     const start = p.mgmt.state.opinion;
     p.runHours(6);
     expect(p.mgmt.state.opinion).toBeLessThan(start - 10);

@@ -223,10 +223,13 @@ export class Hud {
     this.root.classList.toggle('driving', on);
   }
 
-  setObjectives(title: string, list: readonly Objective[]): void {
+  /** Objective list; the first unfinished one shows its hint. */
+  setObjectives(title: string, list: ReadonlyArray<Objective & { hint?: string }>): void {
+    const current = list.find((o) => !o.done);
     const html =
       `<div class="obj-title">${title}</div>` +
-      list.map((o) => `<div class="obj ${o.done ? 'done' : ''}"><span class="obj-box"></span>${o.text}</div>`).join('');
+      list.map((o) => `<div class="obj ${o.done ? 'done' : ''}"><span class="obj-box"></span>${o.text}</div>` +
+        (o === current && o.hint ? `<div class="obj-hint">${o.hint}</div>` : '')).join('');
     if (this.lastText.get(this.objectives) === html) return;
     this.lastText.set(this.objectives, html);
     this.objectives.innerHTML = html;

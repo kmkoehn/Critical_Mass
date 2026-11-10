@@ -131,6 +131,18 @@ describe('island grid', () => {
     expect(r.state.scram.active).toBe(true);
   });
 
+  it('curtails flexible exports before blacking anyone out', () => {
+    const g = new Grid();
+    g.state.exportScale.city = 1; // tie-line expansion: city can take its base demand again as exports
+    const firm = regionalDemandMW(20, 1);
+    run(g, 20, 3, firm + 50); // enough for all firm load plus a little export
+    expect(g.state.shedFraction).toBe(0);
+    expect(g.state.exportCurtailed).toBeGreaterThan(0.5);
+    for (let i = 0; i < 8; i++) expect(g.isFeederPowered('town', i)).toBe(true);
+    run(g, 20, 3, firm * 0.7); // short even on firm load: now districts go dark
+    expect(g.state.subs.town.feedersOff.length).toBeGreaterThan(0);
+  });
+
   it('opening a substation breaker blacks out just that substation', () => {
     const g = new Grid();
     g.state.subs.industrial.breakerClosed = false;

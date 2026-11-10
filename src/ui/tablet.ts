@@ -9,6 +9,8 @@ import {
 } from '../sim/management';
 import { reactorStatus, type Reactor } from '../sim/reactor';
 import { ROLE_INFO, type Role, type Staff, type StaffMember } from '../sim/staff';
+import { UPGRADES, type UpgradeId, type Upgrades } from '../sim/upgrades';
+import { UNIT2, type Unit2 } from '../sim/unit2';
 import { button, chart, h, meter, readout, section, segmented, setActive, setEnabled, type Tone } from './panels/widgets';
 import './tablet.css';
 
@@ -17,15 +19,20 @@ export interface TabletContext {
   staff: Staff;
   faults: FaultManager;
   grid: Grid;
+  upgrades: Upgrades;
+  unit2: Unit2;
+  act(): number;
+  /** Pay for and start an upgrade; returns why not, or null. */
+  buyUpgrade(id: UpgradeId): string | null;
   reactor(): Reactor;
   gameSeconds(): number;
   autopilotStatus(): { active: boolean; text: string };
 }
 
-type TabId = 'overview' | 'finance' | 'staff' | 'work' | 'contracts' | 'regulator' | 'log';
+type TabId = 'overview' | 'finance' | 'staff' | 'work' | 'contracts' | 'upgrades' | 'regulator' | 'log';
 const TABS: Array<[TabId, string]> = [
   ['overview', 'Overview'], ['finance', 'Finances'], ['staff', 'Staff'], ['work', 'Work orders'],
-  ['contracts', 'Contracts'], ['regulator', 'Regulator'], ['log', 'Log'],
+  ['contracts', 'Contracts'], ['upgrades', 'Upgrades'], ['regulator', 'Regulator'], ['log', 'Log'],
 ];
 
 interface View {
@@ -159,7 +166,7 @@ function finance(ctx: TabletContext): View {
     return { k, today: h('td', 'num', tr), yday: h('td', 'num', tr) };
   });
   const tot = h('tr', 'total', body);
-  h('td', '', tot, 'Net');
+  h('td', '', tot, 'Operating profit');
   const totT = h('td', 'num', tot);
   const totY = h('td', 'num', tot);
   let tick = 0;
@@ -347,6 +354,63 @@ function contracts(ctx: TabletContext): View {
   };
 }
 
+// ---------------------------------------------------------------- upgrades
+
+function upgradesView(ctx: TabletContext): View {
+  const el = h('div', 'tb-col');
+  const u2 = section(el, 'Unit 2');
+  const u2Status = readout(u2, 'Status', '');
+  const u2Out = readout(u2, 'Output', 'MWe');
+  const u2Row = h('div', 'cp-btnrow', u2);
+  const u2Set = h('span', 'tb-setpoint', u2Row);
+  const adj = (d: number) => () => {
+    const s = ctx.unit2.state;
+    s.setpointMW = Math.min(UNIT2.maxMW, Math.max(0, s.setpointMW + d));
+  };
+  button(u2Row, '−100', adj(-100));
+  button(u2Row, '+100', adj(100));
+  h('div', 'cp-note', u2, 'Unit 2 runs at this base-load setpoint with its own crew; Unit 1 (you or your shift operator) follows the rest of the demand. With Unit 1 off-line, Unit 2 follows demand on its own.');
+
+  const list = section(el, 'Plant upgrades');
+  const rows = UPGRADES.map((u) => {
+    const r = h('div', 'tb-row tb-upgrade', list);
+    const who = h('div', 'tb-who', r);
+    h('div', 'tb-name', who, u.name);
+    h('div', 'tb-sub', who, `${u.effect}`);
+    h('div', 'tb-sub', who, `${money(u.cost)} · ${u.hours} game hours to build`);
+    const bar = h('div', 'tb-fatigue', r);
+    const fill = h('div', 'tb-fatigue-fill', bar);
+    const st = h('div', 'tb-state', r);
+    const msg = { text: '' };
+    const buy = button(r, 'Build', () => {
+      msg.text = ctx.buyUpgrade(u.id) ?? '';
+    }, 'hire');
+    return { u, fill, st, buy, msg };
+  });
+  return {
+    el,
+    update() {
+      const t = ctx.gameSeconds();
+      const s = ctx.unit2.state;
+      const p = ctx.upgrades.progress('unit2', t);
+      u2Status.set(!s.built ? (p > 0 ? `Under construction (${(p * 100).toFixed(0)}%)` : 'Not built')
+        : t < s.availableAt ? (s.tripped ? 'Tripped — restarting' : 'Commissioning') : 'Running', s.built ? 'ok' : 'dim');
+      u2Out.set(s.outputMW.toFixed(0), s.outputMW > 0 ? 'ok' : 'dim');
+      u2Set.textContent = `Setpoint ${s.setpointMW} MW`;
+      for (const r of rows) {
+        const prog = ctx.upgrades.progress(r.u.id, t);
+        r.fill.style.width = `${Math.round(prog * 100)}%`;
+        r.fill.dataset.tone = prog >= 1 ? 'ok' : 'warn';
+        const block = ctx.upgrades.blocker(r.u.id, ctx.mgmt.state.cash, ctx.act());
+        r.st.textContent = prog >= 1 ? 'Built' : prog > 0 ? `${(prog * 100).toFixed(0)}% built` : r.msg.text || block || 'Ready to build';
+        r.st.dataset.tone = prog >= 1 ? 'ok' : block && prog === 0 ? 'bad' : '';
+        setEnabled(r.buy, block === null);
+        r.buy.hidden = prog > 0;
+      }
+    },
+  };
+}
+
 // ---------------------------------------------------------------- regulator
 
 function regulator(ctx: TabletContext): View {
@@ -407,7 +471,7 @@ function logView(ctx: TabletContext): View {
 }
 
 const BUILDERS: Record<TabId, (ctx: TabletContext) => View> = {
-  overview, finance, staff: staffView, work: workOrders, contracts, regulator, log: logView,
+  overview, finance, staff: staffView, work: workOrders, contracts, upgrades: upgradesView, regulator, log: logView,
 };
 
 export class Tablet {

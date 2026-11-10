@@ -181,6 +181,9 @@ const STRIKE_TARGETS: ReadonlyArray<{ x: number; z: number; sub?: SubstationId; 
 ];
 
 export class FaultManager {
+  /** Storm-hardened lines: lightning does a quarter of the damage. */
+  stormHardened = false;
+
   constructor(readonly state: FaultState = createFaultState()) {}
 
   private random(): number {
@@ -245,9 +248,10 @@ export class FaultManager {
       if (this.random() < LIGHTNING.targeted) {
         const target = STRIKE_TARGETS[Math.floor(this.random() * STRIKE_TARGETS.length)];
         hits.push({ x: target.x, z: target.z, hit: target.name });
-        if (target.sub && this.random() < LIGHTNING.substationTrip) {
+        const harden = this.stormHardened ? 0.25 : 1;
+        if (target.sub && this.random() < LIGHTNING.substationTrip * harden) {
           if (this.inject('substationTrip', target.sub, t)) this.log(t, 'danger', `Lightning struck ${target.name}`);
-        } else if (target.line && this.random() < LIGHTNING.lineDown) {
+        } else if (target.line && this.random() < LIGHTNING.lineDown * harden) {
           if (this.inject('lineDown', target.line, t)) this.log(t, 'danger', `Lightning brought down a tower on the ${target.line} line`);
         }
       } else {

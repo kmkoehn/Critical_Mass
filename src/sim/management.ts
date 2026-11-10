@@ -16,7 +16,7 @@ export const MGMT_CONFIG = {
   /** Fuel, $ per MWh of electricity generated. */
   fuelPerMWh: 8,
   /** Spot price paid by uncontracted customers, $/MWh: base + premium at high demand. */
-  spotBase: 40,
+  spotBase: 50,
   spotPeak: 35,
   outfallLimit: 28,
   /** Environmental fine while the outfall is over the limit, $ per game hour. */
@@ -47,11 +47,12 @@ export interface Ledger {
   fines: number;
   penalties: number;
   interest: number;
+  capital: number;
 }
 
 export const LEDGER_LABELS: Record<keyof Ledger, string> = {
   sales: 'Electricity sales (spot)', contracts: 'Contract sales', wages: 'Staff wages', fuel: 'Fuel', overhead: 'Site overheads',
-  repairs: 'Repairs & parts', fines: 'Fines', penalties: 'Contract penalties', interest: 'Loan interest',
+  repairs: 'Repairs & parts', fines: 'Fines', penalties: 'Contract penalties', interest: 'Loan interest', capital: 'Construction',
 };
 export const INCOME_KEYS: ReadonlyArray<keyof Ledger> = ['sales', 'contracts'];
 
@@ -107,6 +108,14 @@ export interface ManagementState {
   coreDamageCounted: boolean;
   bankrupt: boolean;
   rng: number;
+  // Lifetime stats (final report, achievements).
+  totalTrips: number;
+  lastTripAt: number;
+  repairsByPlayer: number;
+  repairsByCrew: number;
+  breakersResetByPlayer: number;
+  /** The grid has been energised at least once (before that, darkness isn't held against you). */
+  everEnergized: boolean;
 }
 
 export interface ManagementEvent {
@@ -126,8 +135,11 @@ export interface CompanyContext {
   playerDoseMSv: number;
 }
 
-const emptyLedger = (): Ledger => ({ sales: 0, contracts: 0, wages: 0, fuel: 0, overhead: 0, repairs: 0, fines: 0, penalties: 0, interest: 0 });
+const emptyLedger = (): Ledger => ({
+  sales: 0, contracts: 0, wages: 0, fuel: 0, overhead: 0, repairs: 0, fines: 0, penalties: 0, interest: 0, capital: 0,
+});
 
+/** Operating profit (construction spending is shown separately and not counted). */
 export function ledgerNet(l: Ledger): number {
   return l.sales + l.contracts - l.wages - l.fuel - l.overhead - l.repairs - l.fines - l.penalties - l.interest;
 }
@@ -143,6 +155,7 @@ export function createManagementState(seed = 2718): ManagementState {
     balance: [], nextBalanceSample: 0, opinion: 55, contracts: [], offers: [], nextContractId: 1,
     regulator: { nextVisit: MGMT_CONFIG.inspection.firstAt, announced: false, failures: 0, reports: [], shutdownUntil: 0, licenseRevoked: false },
     trips: [], bypassAt: -1e9, wasScram: false, coreDamageCounted: false, bankrupt: false, rng: seed >>> 0,
+    totalTrips: 0, lastTripAt: -1, repairsByPlayer: 0, repairsByCrew: 0, breakersResetByPlayer: 0, everEnergized: false,
   };
 }
 
@@ -151,6 +164,9 @@ const SUB_NAME: Record<SubstationId, string> = {
 };
 
 export class Management {
+  /** Upgrade effects set by the game each step. */
+  mods = { opinionBaseline: 50, opinionRecovery: 0.4, inspectionBonus: 0, extraOverheadPerHour: 0, extraGenerationMW: 0 };
+
   constructor(readonly state: ManagementState = createManagementState()) {
     if (this.state.offers.length === 0) this.refreshOffers(0);
   }
@@ -173,7 +189,7 @@ export class Management {
     for (const d of SUBSTATIONS) {
       if (st.contracts.some((c) => c.sub === d.id)) continue;
       if (d.id === 'town' && st.opinion < 20) continue; // the council won't deal with you
-      const base = { town: 58, industrial: 54, farmland: 50, city: 66 }[d.id];
+      const base = { town: 66, industrial: 62, farmland: 58, city: 74 }[d.id];
       const days = 5 + Math.floor(this.random() * 6);
       st.offers.push({
         id: st.nextContractId++, sub: d.id,
@@ -196,6 +212,11 @@ export class Management {
     st.cash += o.bonus;
     st.today.contracts += o.bonus;
     return o;
+  }
+
+  /** Construction spending (upgrades). */
+  spendCapital(amount: number): void {
+    this.charge('capital', amount);
   }
 
   takeLoan(): boolean {
@@ -247,11 +268,16 @@ export class Management {
       }
     }
     this.charge('wages', ctx.staff.wagesPerHour * h);
-    this.charge('fuel', rs.electricalOutputMW * h * MGMT_CONFIG.fuelPerMWh);
-    this.charge('overhead', MGMT_CONFIG.overheadPerHour * h);
+    this.charge('fuel', (rs.electricalOutputMW + this.mods.extraGenerationMW) * h * MGMT_CONFIG.fuelPerMWh);
+    this.charge('overhead', (MGMT_CONFIG.overheadPerHour + this.mods.extraOverheadPerHour) * h);
     this.charge('interest', st.loan * MGMT_CONFIG.loanRate * (h / 8760));
     if (rs.outfallTemp > MGMT_CONFIG.outfallLimit) this.charge('fines', MGMT_CONFIG.outfallFinePerHour * h);
-    for (const rep of ctx.faults.drainRepairs()) this.charge('repairs', REPAIR_COST[rep.kind as FaultKind]);
+    for (const rep of ctx.faults.drainRepairs()) {
+      this.charge('repairs', REPAIR_COST[rep.kind as FaultKind]);
+      if (rep.by === 'player') st.repairsByPlayer++;
+      else st.repairsByCrew++;
+      if (rep.by === 'player' && rep.kind === 'substationTrip') st.breakersResetByPlayer++;
+    }
 
     if (t >= st.nextBalanceSample) {
       st.balance.push({ t, cash: st.cash });
@@ -290,6 +316,8 @@ export class Management {
     // ---------------- incidents seen by the public and the regulator
     if (rs.scram.active && !st.wasScram) {
       st.trips.push(t);
+      st.totalTrips++;
+      st.lastTripAt = t;
       st.opinion -= 3;
     }
     st.wasScram = rs.scram.active;
@@ -304,12 +332,15 @@ export class Management {
     // ---------------- public opinion
     const before = st.opinion;
     const town = g.subs.town;
-    const darkFrac = g.dead ? 1 : town.feedersOff.length / 8;
+    // Millbrook has been dark for years; it only resents blackouts once Riverbend has powered it.
+    if (!g.dead) st.everEnergized = true;
+    const darkFrac = !st.everEnergized ? 0 : g.dead ? 1 : town.feedersOff.length / 8;
     st.opinion -= darkFrac * 6 * h;
     if (rs.plantFaults.radLeak > 0) st.opinion -= 1 * h;
     if (rs.outfallTemp > MGMT_CONFIG.outfallLimit) st.opinion -= 0.5 * h;
-    if (!g.dead && darkFrac === 0 && rs.generatorSynced) st.opinion += (st.opinion < 75 ? 0.4 : 0) * h;
-    st.opinion += (50 - st.opinion) * 0.004 * h; // slow drift back towards neutral
+    const base = this.mods.opinionBaseline;
+    if (!g.dead && darkFrac === 0 && g.supplyMW > 0) st.opinion += (st.opinion < base + 25 ? this.mods.opinionRecovery : 0) * h;
+    st.opinion += (base - st.opinion) * 0.004 * h; // slow drift back towards neutral
     if (rs.meltdown) st.opinion = 0;
     st.opinion = Math.min(100, Math.max(0, st.opinion));
     if (before >= 25 && st.opinion < 25) events.push({ kind: 'danger', text: 'Protesters are gathering at the plant gate.' });
@@ -361,7 +392,11 @@ export class Management {
     if (duty && duty.fatigue > 0.9) ded(10, `${duty.name} on shift while exhausted`);
     if (ctx.playerDoseMSv > 30) ded(10, `director's dose today ${ctx.playerDoseMSv.toFixed(0)} mSv`);
     if (ctx.staff.byRole('security').length === 0) ded(5, 'no security staff on site');
-    score = Math.max(0, score);
+    if (this.mods.inspectionBonus) {
+      score += this.mods.inspectionBonus;
+      findings.push(`+${this.mods.inspectionBonus} emergency diesel generators`);
+    }
+    score = Math.max(0, Math.min(100, score));
     const passed = score >= MGMT_CONFIG.inspection.passScore;
     let consequence = 'No action.';
     if (passed) {
