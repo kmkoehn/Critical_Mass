@@ -11,7 +11,7 @@ function towerRadius(y: number): number {
   return TOWER.throatR * Math.sqrt(1 + k * k);
 }
 
-function softPuffTexture(): THREE.Texture {
+export function softPuffTexture(): THREE.Texture {
   const c = document.createElement('canvas');
   c.width = c.height = 128;
   const g = c.getContext('2d')!;

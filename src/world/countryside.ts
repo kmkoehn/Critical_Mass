@@ -49,11 +49,16 @@ function buildTrees(b: WorldBuilder): number {
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a4330, roughness: 1 });
   const leafMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true });
 
-  const pines = spots.filter((_, i) => i % 3 !== 0);
-  const broad = spots.filter((_, i) => i % 3 === 0);
-  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, spots.length);
-  const pineMesh = new THREE.InstancedMesh(pineGeo, leafMat, pines.length);
-  const broadMesh = new THREE.InstancedMesh(leafGeo, leafMat, broad.length);
+  // Trees are instanced per map cell, so whole cells outside the view (or the shadow camera)
+  // are culled instead of drawing every tree in the valley every frame.
+  const CELL = 500;
+  const cells = new Map<string, Array<{ spot: [number, number, number, number]; i: number }>>();
+  spots.forEach((spot, i) => {
+    const key = `${Math.floor(spot[0] / CELL)},${Math.floor(spot[2] / CELL)}`;
+    let list = cells.get(key);
+    if (!list) cells.set(key, (list = []));
+    list.push({ spot, i });
+  });
   const mtx = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const s = new THREE.Vector3();
@@ -61,28 +66,42 @@ function buildTrees(b: WorldBuilder): number {
   const color = new THREE.Color();
   const up = new THREE.Vector3(0, 1, 0);
 
-  spots.forEach(([x, y, z, sc], i) => {
-    q.setFromAxisAngle(up, (i * 2.399) % (Math.PI * 2));
-    mtx.compose(p.set(x, y - 0.3, z), q, s.set(sc, sc, sc));
-    trunks.setMatrixAt(i, mtx);
-    b.collision.addCyl(x, z, 0.35 * sc, y - 1, y + 9 * sc);
-  });
-  pines.forEach(([x, y, z, sc], i) => {
-    q.setFromAxisAngle(up, i * 1.7);
-    mtx.compose(p.set(x, y - 0.3, z), q, s.set(sc, sc * (0.9 + (i % 5) * 0.06), sc));
-    pineMesh.setMatrixAt(i, mtx);
-    pineMesh.setColorAt(i, color.setHSL(0.30 + (i % 7) * 0.008, 0.38, 0.17 + (i % 5) * 0.015));
-  });
-  broad.forEach(([x, y, z, sc], i) => {
-    q.setFromAxisAngle(up, i * 0.9);
-    mtx.compose(p.set(x, y - 0.3, z), q, s.set(sc * 1.1, sc, sc * 1.1));
-    broadMesh.setMatrixAt(i, mtx);
-    broadMesh.setColorAt(i, color.setHSL(0.22 + (i % 9) * 0.01, 0.42, 0.24 + (i % 4) * 0.02));
-  });
-  for (const mesh of [trunks, pineMesh, broadMesh]) {
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    b.root.add(mesh);
+  for (const list of cells.values()) {
+    // Same 1-in-3 mix of broadleaf and pine as before, keyed on the global index.
+    const pines = list.filter(({ i }) => i % 3 !== 0);
+    const broad = list.filter(({ i }) => i % 3 === 0);
+    const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, list.length);
+    const pineMesh = new THREE.InstancedMesh(pineGeo, leafMat, Math.max(1, pines.length));
+    const broadMesh = new THREE.InstancedMesh(leafGeo, leafMat, Math.max(1, broad.length));
+    pineMesh.count = pines.length;
+    broadMesh.count = broad.length;
+    list.forEach(({ spot: [x, y, z, sc], i }, k) => {
+      q.setFromAxisAngle(up, (i * 2.399) % (Math.PI * 2));
+      mtx.compose(p.set(x, y - 0.3, z), q, s.set(sc, sc, sc));
+      trunks.setMatrixAt(k, mtx);
+      b.collision.addCyl(x, z, 0.35 * sc, y - 1, y + 9 * sc);
+    });
+    pines.forEach(({ spot: [x, y, z, sc], i }, k) => {
+      const j = Math.floor((i * 2) / 3);
+      q.setFromAxisAngle(up, j * 1.7);
+      mtx.compose(p.set(x, y - 0.3, z), q, s.set(sc, sc * (0.9 + (j % 5) * 0.06), sc));
+      pineMesh.setMatrixAt(k, mtx);
+      pineMesh.setColorAt(k, color.setHSL(0.30 + (j % 7) * 0.008, 0.38, 0.17 + (j % 5) * 0.015));
+    });
+    broad.forEach(({ spot: [x, y, z, sc], i }, k) => {
+      const j = i / 3;
+      q.setFromAxisAngle(up, j * 0.9);
+      mtx.compose(p.set(x, y - 0.3, z), q, s.set(sc * 1.1, sc, sc * 1.1));
+      broadMesh.setMatrixAt(k, mtx);
+      broadMesh.setColorAt(k, color.setHSL(0.22 + (j % 9) * 0.01, 0.42, 0.24 + (j % 4) * 0.02));
+    });
+    for (const mesh of [trunks, pineMesh, broadMesh]) {
+      if (mesh.count === 0) continue;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.computeBoundingSphere();
+      b.root.add(mesh);
+    }
   }
   return spots.length;
 }

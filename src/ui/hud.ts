@@ -1,4 +1,4 @@
-/** DOM HUD: top bar, crosshair, minimap frame, objectives, toasts, debug panel, start/pause overlay. */
+/** DOM HUD: top bar, crosshair, minimap frame, objectives, toasts, debug panel, (The title and pause menus live in menu.ts.) */
 export interface Objective {
   id: string;
   text: string;
@@ -37,12 +37,7 @@ export class Hud {
   private readonly objectives: HTMLElement;
   private readonly toasts: HTMLElement;
   private readonly debug: HTMLElement;
-  private readonly overlay: HTMLElement;
-  private readonly overlayTitle: HTMLElement;
-  private readonly overlayButton: HTMLButtonElement;
-  private readonly loading: HTMLElement;
   private lastText = new Map<HTMLElement, string>();
-  onStart: () => void = () => {};
 
   constructor(parent: HTMLElement) {
     this.root = el('div', 'hud', parent);
@@ -96,45 +91,6 @@ export class Hud {
     this.bigMapCanvas = el('canvas', '', this.bigMapRoot);
     el('div', 'bigmap-hint', this.bigMapRoot).textContent = 'M  Close map';
 
-    this.overlay = el('div', 'overlay', this.root);
-    const card = el('div', 'overlay-card', this.overlay);
-    el('div', 'ov-kicker', card).textContent = 'Riverbend Generating Station';
-    this.overlayTitle = el('h1', 'ov-title', card);
-    this.overlayTitle.textContent = 'Critical Mass';
-    el('p', 'ov-sub', card).textContent =
-      'You are the new plant director. Get to know the valley before you bring the reactor back to life.';
-    const keys = el('div', 'ov-keys', card);
-    const bindings: Array<[string, string]> = [
-      ['W A S D', 'Move'], ['Mouse', 'Look'], ['Shift', 'Sprint'], ['Space', 'Jump'],
-      ['C', 'Crouch'], ['M', 'Map'], ['Esc', 'Pause'], ['`', 'Debug panel'],
-    ];
-    for (const [k, v] of bindings) {
-      el('kbd', '', keys).textContent = k;
-      el('span', '', keys).textContent = v;
-    }
-    this.loading = el('div', 'ov-loading', card);
-    this.loading.textContent = 'Building the valley…';
-    this.overlayButton = el('button', 'ov-button', card);
-    this.overlayButton.textContent = 'Click to start';
-    this.overlayButton.hidden = true;
-    this.overlay.addEventListener('click', () => {
-      if (!this.overlayButton.hidden) this.onStart();
-    });
-  }
-
-  ready(): void {
-    this.loading.hidden = true;
-    this.overlayButton.hidden = false;
-  }
-
-  showOverlay(paused: boolean): void {
-    this.overlay.hidden = false;
-    this.overlayButton.textContent = paused ? 'Click to resume' : 'Click to start';
-    this.overlayTitle.textContent = paused ? 'Paused' : 'Critical Mass';
-  }
-
-  hideOverlay(): void {
-    this.overlay.hidden = true;
   }
 
   private set(e: HTMLElement, text: string): void {

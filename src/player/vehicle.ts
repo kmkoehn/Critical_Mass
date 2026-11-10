@@ -59,6 +59,15 @@ export class Vehicle {
     this.y = this.groundAt(x, z, hf.heightAt(x, z) + 2);
   }
 
+  /** Put the truck somewhere (loading a save), parked. */
+  place(x: number, z: number, yaw: number): void {
+    this.x = x;
+    this.z = z;
+    this.yaw = yaw;
+    this.speed = this.steer = 0;
+    this.y = this.groundAt(x, z, this.hf.heightAt(x, z) + 2);
+  }
+
   private groundAt(x: number, z: number, fromY: number): number {
     return this.col.groundAt(x, z, fromY, TRUCK.step, this.hf.heightAt(x, z));
   }

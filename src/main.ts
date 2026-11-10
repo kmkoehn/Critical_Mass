@@ -6,10 +6,9 @@ import * as THREE from 'three';
 import './ui/style.css';
 import { GameClock } from './sim/clock';
 import { Reactor, averageRodInsertion, createReactorState, reactorStatus } from './sim/reactor';
-import { Annunciator } from './sim/annunciator';
+import { ANNUNCIATOR_TILES, Annunciator } from './sim/annunciator';
 import { TrendRecorder } from './sim/history';
 import { Grid, SUBSTATIONS } from './sim/grid';
-import { activeAlarms } from './sim/alarms';
 import { WEATHER_LABEL, Weather, createWeatherState, type WeatherKind } from './sim/weather';
 import {
   FaultManager, REPAIR_SECONDS, faultLocation, faultPoint, faultStatus, faultTitle, type Fault, type FaultKind,
@@ -31,8 +30,9 @@ import { World } from './world/world';
 import { DayNight } from './world/sky';
 import { TruckModel } from './world/truck';
 import { WeatherFx } from './world/weatherFx';
+import { PlantEffects } from './world/effects';
 import {
-  FIELD_POINTS, PLANT_LAYOUT, REST_POINT, ROADS, SPAWN, TRUCK_SPAWN, zoneNameAt,
+  FIELD_POINTS, PLANT_LAYOUT, REST_POINT, ROADS, SPAWN, TOWN_SQUARE, TRUCK_SPAWN, zoneNameAt,
   type FieldPointId, type SubstationId,
 } from './world/layout';
 import type { PowerView } from './world/world';
@@ -42,7 +42,11 @@ import { Hud } from './ui/hud';
 import { BigMap, Minimap, renderMapImage, type MapMarker, type MapPin } from './ui/map';
 import { reactorDebugText } from './ui/reactorDebug';
 import { PanelManager } from './ui/panels/panelManager';
-import { SoundFx } from './ui/audio';
+import { SoundFx, type AlarmLevel } from './ui/audio';
+import { Menu } from './ui/menu';
+import { QUALITY, loadSettings, saveSettings, type Settings } from './ui/settings';
+import { SaveStore, browserStore, SAVE_VERSION, type SaveData, type SlotId } from './save/save';
+import { PLAYER } from './player/controller';
 import {
   drawAnnunciator, drawCoolingScreen, drawGridScreen, drawPrimaryScreen, drawReactorScreen, drawTrendScreen, drawTurbineScreen,
 } from './ui/screens';
@@ -52,6 +56,8 @@ const WARPS = [1, 4, 16];
 /** Personal dose limit (mSv per day) before you're sent to rest. */
 const DOSE_LIMIT = 50;
 const REST_HOURS = 8;
+/** Autosave interval, game seconds. */
+const AUTOSAVE_EVERY = 3 * 3600;
 
 type Mode = 'paused' | 'play' | 'panel' | 'tablet' | 'over';
 
@@ -117,6 +123,7 @@ class Game {
   private world!: World;
   private dayNight!: DayNight;
   private weatherFx!: WeatherFx;
+  private effects!: PlantEffects;
   private player!: PlayerController;
   private vehicle!: Vehicle;
   private truck!: TruckModel;
@@ -131,6 +138,11 @@ class Game {
   private readonly unit2 = new Unit2();
   private endScreen!: EndScreen;
   private pendingWin = false;
+  private readonly store = browserStore();
+  private readonly saves = new SaveStore(this.store);
+  private settings: Settings = loadSettings(this.store);
+  private menu!: Menu;
+  private nextAutosave = 0;
 
   private mode: Mode = 'paused';
   private driving = false;
@@ -157,10 +169,11 @@ class Game {
   private readonly focus = new THREE.Vector3();
 
   constructor(app: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    const q = QUALITY[this.settings.quality];
+    this.renderer = new THREE.WebGLRenderer({ antialias: q.antialias, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatio));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = q.shadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.62;
@@ -172,11 +185,18 @@ class Game {
 
     this.hud = new Hud(app);
     this.input = new Input(this.renderer.domElement);
-    this.hud.onStart = () => {
-      this.sound.unlock();
-      this.input.requestLock();
-    };
+    this.menu = new Menu(this.hud.root, {
+      newGame: () => this.beginPlay(),
+      resume: () => this.beginPlay(),
+      load: (slot) => this.loadGame(slot),
+      save: () => this.saveGame('manual'),
+      quitToTitle: () => this.quitToTitle(),
+      settingsChanged: (st) => this.applySettings(st),
+    }, this.saves, { ...this.settings });
     this.input.onLockChange = (locked) => this.onLockChange(locked);
+    this.renderer.domElement.addEventListener('mousedown', () => {
+      if (this.mode === 'play' && !this.input.locked && !this.noLock) this.input.requestLock();
+    });
 
     window.addEventListener('resize', () => {
       this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -192,6 +212,7 @@ class Game {
     this.world = new World(this.scene);
     this.dayNight = new DayNight(this.scene);
     this.weatherFx = new WeatherFx(this.scene);
+    this.effects = new PlantEffects(this.world.root, this.scene, this.world.hf);
     this.player = new PlayerController(this.world.hf, this.world.collision);
     this.player.spawn(SPAWN.x, SPAWN.z, SPAWN.yaw);
     this.vehicle = new Vehicle(this.world.hf, this.world.collision, onAnyRoad, TRUCK_SPAWN.x, TRUCK_SPAWN.z, TRUCK_SPAWN.yaw);
@@ -231,7 +252,10 @@ class Game {
     this.endScreen = new EndScreen(this.hud.root);
     console.info(`[world] built in ${Math.round(performance.now() - t0)} ms`, this.world.stats);
 
-    this.hud.ready();
+    this.applySettings(this.settings);
+    this.nextAutosave = this.clock.seconds + AUTOSAVE_EVERY;
+    this.hud.root.classList.add('at-title');
+    this.menu.ready();
     this.renderer.setAnimationLoop((t) => this.frame(t));
     this.exposeDebugApi();
   }
@@ -250,11 +274,12 @@ class Game {
   private setMode(mode: Mode): void {
     this.mode = mode;
     this.hud.setPanelMode(mode === 'panel' || mode === 'tablet');
+    this.hud.root.classList.toggle('at-title', mode === 'paused' && !this.started);
     if (mode === 'paused') {
-      this.hud.showOverlay(this.started);
+      this.menu.show(this.started ? 'pause' : 'title');
       return;
     }
-    this.hud.hideOverlay();
+    this.menu.hide();
     if (!this.started) {
       this.started = true;
       this.hud.toast('Welcome to Riverbend. Take a look around the valley.');
@@ -321,6 +346,17 @@ class Game {
   private event(kind: 'info' | 'good' | 'warn' | 'danger', text: string): void {
     this.hud.toast(text, kind);
     this.faults.note(this.clock.seconds, kind, text);
+  }
+
+  /** Most severe alarm still waiting to be acknowledged. */
+  private alarmLevel(): AlarmLevel {
+    const tiles = this.annunciator.state.tiles;
+    let level: AlarmLevel = 'none';
+    const rank = { none: 0, warning: 1, alarm: 2, trip: 3 } as const;
+    for (const a of ANNUNCIATOR_TILES) {
+      if (tiles[a.id] === 'alerting' && rank[a.severity] > rank[level]) level = a.severity;
+    }
+    return level;
   }
 
   private activeAlarmIds(): string[] {
@@ -462,6 +498,140 @@ class Game {
     this.hud.toast(`You rested for ${REST_HOURS} hours. Dose counter reset.`, 'info');
   }
 
+  // ------------------------------------------------------------------ menu, settings, saving
+
+  /** Start or resume play from a menu button (a user gesture, so audio and pointer lock are allowed). */
+  private beginPlay(): void {
+    this.sound.unlock();
+    if (this.noLock) {
+      this.setMode('play');
+      return;
+    }
+    this.input.requestLock();
+    // Some browsers refuse pointer lock (embedded views, permissions): play anyway, and a click
+    // on the view tries again.
+    setTimeout(() => {
+      if ((this.mode === 'paused' || this.mode === 'over') && !this.input.locked) {
+        this.setMode('play');
+        this.hud.toast('Click the view to capture the mouse for looking around', 'info');
+      }
+    }, 600);
+  }
+
+  private applySettings(st: Settings): void {
+    const prevQuality = this.settings.quality;
+    this.settings = st;
+    saveSettings(this.store, st);
+    this.player.sensitivity = PLAYER.sensitivity * st.sensitivity;
+    this.player.invertY = st.invertY;
+    this.clock.scale = 86400 / (st.dayMinutes * 60);
+    this.sound.setVolume(st.volume);
+    const q = QUALITY[st.quality];
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatio));
+    this.camera.far = q.drawDistance;
+    this.camera.updateProjectionMatrix();
+    this.dayNight.setDrawDistance(q.drawDistance);
+    this.dayNight.setShadowQuality(q.shadows, q.shadowMap);
+    if (this.renderer.shadowMap.enabled !== q.shadows || prevQuality !== st.quality) {
+      this.renderer.shadowMap.enabled = q.shadows;
+      // Materials compile differently with and without shadows.
+      this.scene.traverse((o) => {
+        const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+        if (Array.isArray(m)) m.forEach((x) => (x.needsUpdate = true));
+        else if (m) m.needsUpdate = true;
+      });
+    }
+  }
+
+  private snapshot(): SaveData {
+    const p = this.player.pos;
+    const a = this.campaign.actDef;
+    return structuredClone({
+      version: SAVE_VERSION,
+      savedAt: Date.now(),
+      label: `${this.clock.format()} · ${a ? `Act ${this.campaign.state.act}` : 'Sandbox'}`,
+      clockSeconds: this.clock.seconds,
+      reactor: this.reactor.state,
+      grid: this.grid.state,
+      weather: this.weather.state,
+      faults: this.faults.state,
+      staff: this.staff.state,
+      mgmt: this.mgmt.state,
+      campaign: this.campaign.state,
+      upgrades: this.upgrades.state,
+      unit2: this.unit2.state,
+      annunciator: this.annunciator.state,
+      autopilot: this.autopilot.snapshot(),
+      player: { x: p.x, y: p.y, z: p.z, yaw: this.player.yaw, pitch: this.player.pitch },
+      vehicle: { x: this.vehicle.x, z: this.vehicle.z, yaw: this.vehicle.yaw },
+      doseMSv: this.doseMSv,
+    });
+  }
+
+  private saveGame(slot: SlotId): string | null {
+    if (this.campaign.state.gameOver) return 'The game is over: there is nothing to save.';
+    return this.saves.write(slot, this.snapshot());
+  }
+
+  /** Restore a save into the running game, in place (other objects keep their references). */
+  private applySave(d: SaveData): void {
+    this.clock.seconds = d.clockSeconds;
+    this.reactor = new Reactor(d.reactor);
+    Object.assign(this.grid.state, d.grid);
+    this.grid.resync();
+    Object.assign(this.weather.state, d.weather);
+    Object.assign(this.faults.state, d.faults);
+    Object.assign(this.staff.state, d.staff);
+    Object.assign(this.mgmt.state, d.mgmt);
+    Object.assign(this.campaign.state, d.campaign);
+    Object.assign(this.upgrades.state, d.upgrades);
+    Object.assign(this.unit2.state, d.unit2);
+    if (d.annunciator) Object.assign(this.annunciator.state, d.annunciator);
+    if (d.autopilot) this.autopilot.restore(d.autopilot);
+    this.applyUpgrades();
+    this.trends.clear();
+    this.doseMSv = d.doseMSv ?? 0;
+    this.repair = null;
+    this.pendingWin = false;
+    this.resting = 0;
+    this.hud.setFade(null);
+    if (this.driving) {
+      this.driving = false;
+      this.hud.setDriving(false);
+    }
+    this.vehicle.place(d.vehicle.x, d.vehicle.z, d.vehicle.yaw);
+    this.player.noclip = false;
+    this.player.spawn(d.player.x, d.player.z, d.player.yaw, d.player.y + 1.5);
+    this.player.pitch = d.player.pitch;
+    this.panels.close();
+    this.tablet.close();
+    this.endScreen.hide();
+    this.sound.setSiren(false);
+    this.nextAutosave = this.clock.seconds + AUTOSAVE_EVERY;
+  }
+
+  private loadGame(slot: SlotId): string | null {
+    let d: SaveData | null;
+    try {
+      d = this.saves.read(slot);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    if (!d) return 'That save slot is empty.';
+    this.applySave(d);
+    this.started = true;
+    // Leave the end screen's mode; play resumes when the mouse is captured.
+    if (this.mode === 'over') this.mode = 'paused';
+    this.beginPlay();
+    this.hud.toast(`Loaded: ${d.label}`, 'good');
+    return null;
+  }
+
+  private quitToTitle(): void {
+    if (this.settings.autosave && this.started) this.saveGame('auto');
+    location.reload();
+  }
+
   // ------------------------------------------------------------------ objectives
 
   /** Upgrade effects pushed into the other models (every step, so loading a save works too). */
@@ -536,7 +706,17 @@ class Game {
     this.setMode('over');
     if (document.pointerLockElement) document.exitPointerLock();
     if (go.kind === 'meltdown') this.sound.setSiren(true);
-    this.endScreen.show('lose', text.title, text.body, this.stats());
+    const last = this.saves.latest();
+    const info = last ? this.saves.list().find((x) => x.slot === last) : undefined;
+    this.endScreen.show('lose', text.title, text.body, this.stats(), {
+      onLoad: last && info && 'label' in info ? {
+        label: `Load last save (${info.label})`,
+        run: () => {
+          const err = this.loadGame(last);
+          if (err) this.hud.toast(err, 'danger');
+        },
+      } : undefined,
+    });
   }
 
   private showWin(): void {
@@ -545,9 +725,11 @@ class Game {
     this.endScreen.show('win', 'Riverbend is thriving',
       'Two units on the grid, a city contract, and a valley that kept its lights on through the worst heatwave in memory. ' +
       'The board has renewed your contract. Riverbend is yours to run for as long as you like.',
-      this.stats(), () => {
-        this.setMode('play');
-        if (!this.noLock) this.input.requestLock();
+      this.stats(), {
+        onContinue: () => {
+          this.setMode('play');
+          if (!this.noLock) this.input.requestLock();
+        },
       });
   }
 
@@ -607,6 +789,17 @@ class Game {
         this.pendingWin = false;
         this.showWin();
       }
+      if (this.clock.seconds >= this.nextAutosave) {
+        this.nextAutosave = this.clock.seconds + AUTOSAVE_EVERY;
+        if (this.settings.autosave && this.mode !== 'over' && !this.campaign.state.gameOver) {
+          const err = this.saveGame('auto');
+          if (err) this.hud.toast(err, 'warn');
+        }
+      }
+      if (inp.wasPressed('F5')) {
+        const err = this.saveGame('manual');
+        this.hud.toast(err ?? 'Game saved', err ? 'warn' : 'good');
+      }
 
       if (inp.wasPressed('Backquote')) this.debugVisible = !this.debugVisible;
       if (this.debugVisible) this.debugKeys();
@@ -619,6 +812,8 @@ class Game {
     } else if (this.mode === 'play' && this.resting <= 0 && inp.wasPressed('Tab')) {
       this.openTablet();
     }
+    // Without pointer lock, Esc doesn't leave the lock, so pause here.
+    if (this.mode === 'play' && !inp.locked && !this.noLock && inp.wasPressed('Escape')) this.setMode('paused');
     if (this.mode === 'play' && this.resting <= 0) {
       if (inp.wasPressed('KeyM')) this.bigMap.toggle();
       // Fast travel from the open map with the number keys (on foot only).
@@ -674,6 +869,13 @@ class Game {
       this.chaseCam.lerp(want, 1 - Math.exp(-6 * dt));
       this.camera.position.copy(this.chaseCam);
       this.camera.lookAt(v.x, v.y + 1.8, v.z);
+    } else if (!this.started) {
+      // Title screen: a slow flight around the plant.
+      const a = this.realTime * 0.03 + 0.4;
+      const cx = -470;
+      const cz = 0;
+      this.camera.position.set(cx + Math.cos(a) * 520, 120 + Math.sin(this.realTime * 0.05) * 20, cz + Math.sin(a) * 520);
+      this.camera.lookAt(cx, 50, cz);
     } else {
       this.camera.position.set(p.x, this.player.eyeY, p.z);
       this.camera.rotation.set(this.player.pitch, this.player.yaw, 0);
@@ -694,8 +896,19 @@ class Game {
       const dist = Math.hypot(s.x - p.x, s.z - p.z);
       this.sound.thunder(Math.min(4, dist / 340), Math.max(0.15, 1 - dist / 1500));
     }
-    this.weatherFx.update(dt, this.camera, w.rain);
     const rs = this.reactor.state;
+    // Below freezing, precipitation falls as snow.
+    const freezing = w.ambientTemp < 0.5;
+    this.weatherFx.update(dt, this.camera, freezing ? 0 : w.rain);
+    const tiles = this.annunciator.state.tiles;
+    const plantAlarm = ANNUNCIATOR_TILES.some((a) => a.severity !== 'warning' && tiles[a.id] !== undefined && tiles[a.id] !== 'off');
+    const relief = rs.steamDump > 0.05 ? Math.min(1, rs.steamDump * 1.5)
+      : rs.turbineTripped && rs.secondaryTemp > 240 && rs.neutronFlux > 0.02 ? 0.7 : 0;
+    this.effects.update(dt, this.camera, {
+      alarm: plantAlarm || !!this.campaign.state.gameOver, relief, outfallTemp: rs.outfallTemp, cloud: w.cloud,
+      snow: freezing ? Math.max(w.rain, w.kind === 'coldsnap' ? 0.4 + 0.5 * w.cloud : 0) : 0,
+      daylight: this.dayNight.daylight, night: this.dayNight.night, skyColor: (this.scene.fog as THREE.FogExp2).color,
+    });
     const towerLoad = Math.min(1, rs.condenserLoadMW / 2000);
     const faultPoints = new Set<FieldPointId>();
     for (const f of this.faults.state.faults) {
@@ -726,12 +939,28 @@ class Game {
     const rcp = FIELD_POINTS.rcp;
     const hottest = Math.max(...rs.coolantPumps.map((pp) => (pp.speed > 0.1 ? pp.bearingTemp : 0)));
     const near = 1 / (1 + (Math.hypot(p.x - rcp.x, p.z - rcp.z) / 15) ** 2);
+    const inCR = this.insideControlRoom || this.mode === 'panel';
+    const th = PLANT_LAYOUT.turbineHall;
+    const inHall = Math.abs(p.x - th.cx) < th.w / 2 && Math.abs(p.z - th.cz) < th.d / 2;
+    const ct = PLANT_LAYOUT.containment;
+    const falloff = (d: number, r: number) => 1 / (1 + (d / r) ** 2);
+    const dPlant = Math.hypot(p.x - th.cx, p.z - th.cz);
+    const dTown = Math.hypot(p.x - TOWN_SQUARE.x, p.z - TOWN_SQUARE.z);
     this.sound.update(dt, {
-      horn: running && this.annunciator.hornOn && (this.insideControlRoom || this.mode === 'panel'),
-      severe: activeAlarms(rs).some((a) => a.severity === 'trip'),
+      alarm: running && this.annunciator.hornOn && inCR ? this.alarmLevel() : 'none',
+      power: running ? Math.min(1.2, rs.thermalPowerMW / 3000) : 0,
+      nearReactor: inCR ? 0.5 : falloff(Math.hypot(p.x - ct.x, p.z - ct.z), 60),
+      turbine: running ? Math.min(1.1, rs.turbineRPM / 3600) : 0,
+      nearTurbine: inHall ? 1 : inCR ? 0.15 : falloff(dPlant, 70),
+      indoors: inCR || inHall,
       rain: running ? w.rain : 0,
+      wind: running ? (w.kind === 'thunderstorm' ? 1 : w.kind === 'rain' ? 0.45 : w.kind === 'coldsnap' ? 0.35 : 0.1) : 0,
       whine: running ? Math.max(0, Math.min(1, (hottest - 80) / 40)) * near : 0,
       whinePitch: Math.max(0, Math.min(1, (hottest - 70) / 50)),
+      doseRate: running ? this.doseRate : 0,
+      nearTown: running ? falloff(dTown, 260) : 0,
+      daylight: this.dayNight.daylight,
+      countryside: running ? Math.min(1, Math.max(0, (Math.min(dPlant, dTown) - 250) / 300)) : 0,
     });
 
     this.renderer.render(this.scene, this.camera);
@@ -1016,6 +1245,25 @@ class Game {
         };
       },
       loadPlant: (preset: 'cold' | 'fullPower') => g.loadPlant(preset),
+      /** Renderable objects by type, and the largest groups of separate meshes (performance work). */
+      sceneStats: () => {
+        const types: Record<string, number> = {};
+        const byParent: Record<string, number> = {};
+        g.scene.traverse((o) => {
+          if (!(o as THREE.Mesh).isMesh && !(o as THREE.Sprite).isSprite && !(o as THREE.Line).isLine && !(o as THREE.Points).isPoints) return;
+          types[o.type] = (types[o.type] ?? 0) + 1;
+          if (o.type === 'Mesh') {
+            const k = `${o.parent?.name || o.parent?.type}/${o.name || ((o as THREE.Mesh).material as THREE.Material).name || ((o as THREE.Mesh).geometry.type)}`;
+            byParent[k] = (byParent[k] ?? 0) + 1;
+          }
+        });
+        return { types, top: Object.entries(byParent).sort((a, b) => b[1] - a[1]).slice(0, 15) };
+      },
+      save: (slot: SlotId = 'manual') => g.saveGame(slot),
+      load: (slot: SlotId = 'manual') => g.loadGame(slot),
+      saves: () => g.saves.list(),
+      settings: () => ({ ...g.settings }),
+      applySettings: (st: Partial<Settings>) => g.applySettings({ ...g.settings, ...st }),
       plant: () => {
         const s = g.reactor.state;
         return {
@@ -1043,6 +1291,8 @@ class Game {
         won: g.campaign.state.won,
         achievements: g.campaign.state.achievements,
         draws: g.renderer.info.render.calls,
+        triangles: g.renderer.info.render.triangles,
+        cpuMs: +g.cpuMs.toFixed(2),
       }),
     };
   }

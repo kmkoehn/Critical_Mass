@@ -21,6 +21,12 @@ export function tavgProgram(powerFrac: number): number {
   return 292 + 13 * Math.min(1, Math.max(0, powerFrac));
 }
 
+export interface AutopilotSnapshot {
+  rng: number;
+  derating: boolean;
+  stoppedForCrew: number[];
+}
+
 export class Autopilot {
   private valveTimer = 0;
   private rodTimer = 0;
@@ -73,7 +79,21 @@ export class Autopilot {
   }
 
   private derating = false;
+  /** Real seconds until another overcorrection gets logged. */
+  private mistakeNoteIn = 0;
   private readonly stoppedForCrew = new Set<number>();
+
+  /** The operator's working memory, for save games. */
+  snapshot(): AutopilotSnapshot {
+    return { rng: this.rng, derating: this.derating, stoppedForCrew: [...this.stoppedForCrew] };
+  }
+
+  restore(s: AutopilotSnapshot): void {
+    this.rng = s.rng;
+    this.derating = s.derating;
+    this.stoppedForCrew.clear();
+    for (const i of s.stoppedForCrew) this.stoppedForCrew.add(i);
+  }
 
   step(
     dt: number, reactor: Reactor, grid: Grid, staff: StaffState, op: StaffMember | null, suspended: boolean,
@@ -98,6 +118,7 @@ export class Autopilot {
     const quality = Math.max(0.15, (op.skill / 5) * (1 - 0.6 * op.fatigue));
     const interval = 0.6 + (1 - quality) * 2.4;
     const mistakeChance = 0.03 * (1 - quality);
+    this.mistakeNoteIn -= dt;
     const cap = this.bearingDrill(reactor, op, hotPumps, events);
     if (cap === null) this.derating = false;
 
@@ -111,7 +132,11 @@ export class Autopilot {
       if (s.steamGeneratorLevel < 30) err = Math.min(err, -50);
       if (r() < mistakeChance) {
         err *= 3;
-        events.push(`${op.name} overcorrected the turbine load`);
+        // Mention it now and then, not every slip (it would flood the log).
+        if (this.mistakeNoteIn <= 0) {
+          events.push(`${op.name} overcorrected the turbine load`);
+          this.mistakeNoteIn = 60;
+        }
       }
       const step = Math.max(-0.02, Math.min(0.02, (err / 1000) * (0.4 + 0.6 * quality)));
       reactor.setGovernorValve(s.governorValve + step);

@@ -148,6 +148,12 @@ export class Grid {
   private wasDead = true;
   private lastTownOff = -1;
 
+  /** After loading a saved state: don't announce the grid coming up again. */
+  resync(): void {
+    this.wasDead = this.state.dead;
+    this.lastTownOff = this.state.subs.town.feedersOff.length;
+  }
+
   constructor(readonly state: GridState = createGridState()) {}
 
   isFeederPowered(sub: SubstationId, feeder: number): boolean {

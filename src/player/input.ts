@@ -1,5 +1,5 @@
 /** Keyboard + pointer-lock mouse input. */
-const BLOCK_DEFAULT = new Set(['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backquote']);
+const BLOCK_DEFAULT = new Set(['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backquote', 'F5']);
 
 export class Input {
   private readonly down = new Set<string>();

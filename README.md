@@ -5,10 +5,10 @@ director of the Riverbend Generating Station, a revived plant in a river valley.
 valley, run the reactor from a real control room, keep the town of Millbrook powered, and keep
 the place from melting down.
 
-> **Status: Milestone 7 — progression.** A full campaign: a guided cold start (Act 1), building a
-> team and riding out the first storm (Act 2), and expanding with Unit 2 through a heatwave (Act 3),
-> then an open-ended sandbox. Upgrades, achievements, fast travel, and three ways to lose.
-> The full plan is in `nuclear-plant-game-prompt.md`.
+> **Status: all 8 milestones done.** A full campaign: a guided cold start (Act 1), building a team
+> and riding out the first storm (Act 2), and expanding with Unit 2 through a heatwave (Act 3), then
+> an open-ended sandbox. It has a title screen, save and load, settings, synthesised sound
+> throughout, and weather and plant effects. The original plan is in `nuclear-plant-game-prompt.md`.
 
 ## Run it
 
@@ -34,8 +34,45 @@ npm run build      # type-check + production build into dist/
 | W A S D (in the truck) | Drive and steer. Space is the handbrake; the mouse swings the camera |
 | Tab | Director's Tablet (management). Tab or Esc closes it |
 | M | Full-screen map. On foot, number keys **1–9** fast-travel to places you've already visited (game time passes as if you drove) |
-| Esc | Pause (releases the mouse). With a panel open, Esc (or E) closes it |
+| Esc | Pause menu: resume, save, load, settings, quit to title. With a panel open, Esc (or E) closes it |
+| F5 | Quick save |
 | \` (backtick) | Debug panel. While it's open: **N** toggles noclip flying, **T** skips ahead one hour, **=** cycles simulation speed ×1 / ×4 / ×16 |
+
+## Saving and settings
+
+The title screen offers **Continue** (your most recent save), **New game**, **Load game** and
+**Settings**. There are two save slots, kept in the browser's local storage:
+
+- **Saved game**: written when you choose Save game in the pause menu or press **F5**.
+- **Autosave**: written every 3 game hours and when you quit to the title.
+
+Loading picks up exactly where you left off. The simulation is deterministic, so a loaded game plays
+out the same way the original would have. If you lose, the game-over screen offers to load your last
+save.
+
+**Settings** (remembered between sessions):
+
+- mouse sensitivity and invert Y;
+- the length of a game day (10, 20, 40 or 60 real minutes);
+- graphics quality: low turns off shadows and shortens the view distance, high raises resolution
+  and shadow detail;
+- volume;
+- autosave on or off.
+
+## Sound and effects
+
+All sound is generated live with the Web Audio API, with no audio files. It includes:
+
+- a reactor hum that follows power, and a turbine whine that follows shaft speed;
+- the coolant pump bearing whine, and Geiger counter clicks that speed up with your dose rate;
+- rain, wind and thunder, plus town noise and birdsong in the countryside;
+- control-room alarms that sound different by severity: a soft chime for warnings, a steady horn for
+  alarms and a two-tone klaxon for trips.
+
+Visual effects include cooling-tower plumes that scale with heat load, and rotating red beacons on
+the containment and turbine hall during plant alarms. Steam vents from the turbine hall roof on a
+trip or when the steam dumps open. Heat haze rises over the outfall as it nears its limit. The sky
+has a drifting cloud deck, and below freezing the rain turns to snow.
 
 ## The campaign
 
@@ -243,19 +280,21 @@ All the tuning numbers are in `src/sim/config.ts`.
 - **Industrial park** (south-east), **farmland** (east), **North and West Woods**, with mountains
   ringing the map.
 
-One in-game day lasts 20 real minutes, starting at 08:00.
+By default an in-game day lasts 20 real minutes (adjustable in Settings), starting at 08:00.
 
 ## Code layout
 
 ```
 src/
-  main.ts       bootstrap + game loop (fixed-step sim, variable render)
+  main.ts       bootstrap + game loop (fixed-step sim, variable render), save/load wiring
+  save/         versioned save format, migrations, local-storage slots
   sim/          simulation (no rendering): clock, reactor, alarms, annunciator, trends, island grid, weather, faults,
                 staff, autopilot, management (money, contracts, regulator, opinion), upgrades, Unit 2, campaign, config
   world/        layout data, terrain, river, roads, buildings, town, countryside, grid structures, field equipment,
-                truck model, sky, rain/lightning, collision
+                truck model, sky, rain/lightning, collision, construction, plant/weather effects, static batching
   player/       input, first-person controller, crosshair interaction, truck physics
-  ui/           HUD, minimap, full map, in-world screens, alarm horn, control panels (ui/panels/)
+  ui/           HUD, title/pause menu, settings, minimap, full map, in-world screens, audio, tablet,
+                end screens, control panels (ui/panels/)
   util/         seeded RNG, noise, math
 tests/          Vitest unit tests
 ```
@@ -265,5 +304,11 @@ collision, controller and clock are pure TypeScript with no Three.js, so they're
 and can run headless. Everything is generated from a fixed seed, so the world is identical on
 every run.
 
-For debugging there's `window.__game` in the browser console: `start()`, `teleport(x, z, yaw)`,
-`setHour(h)`, `state()`.
+**Performance:** static buildings are merged by material into map chunks when the world is built,
+which turns about 370 meshes into about 150. Trees are instanced per 500 m cell, so cells out of
+view are culled. Street lamps and pylons are instanced too. A typical view is 30–190 draw calls at
+about 1 ms of CPU per frame.
+
+For debugging there's `window.__game` in the browser console. It includes `start()`,
+`teleport(x, z, yaw)`, `setHour(h)`, `fastForward(hours)`, `state()`, `plant()`, `company()`,
+`save()`, `load()` and `sceneStats()`.

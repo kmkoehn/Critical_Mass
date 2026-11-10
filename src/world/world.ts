@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { WorldBuilder, type MapFeature } from './builder';
 import { CollisionWorld } from './collision';
+import { batchStatic } from './batch';
 import { buildControlRoom, type ControlRoomHandles } from './controlRoom';
 import { buildCountryside } from './countryside';
 import { Expansion, Waypoint } from './expansion';
@@ -41,7 +42,7 @@ export class World {
   readonly controlRoom: ControlRoomHandles;
   /** Everything the crosshair can interact with: control-room panels and field equipment. */
   readonly interactables: THREE.Object3D[];
-  readonly stats: { buildings: number; trees: number; colliders: number; towers: number };
+  readonly stats: { buildings: number; trees: number; colliders: number; towers: number; batched: string };
   readonly expansion: Expansion;
   readonly waypoint: Waypoint;
   private readonly water: Water;
@@ -78,11 +79,13 @@ export class World {
     this.fieldBeacons = b.fieldBeacons;
     this.intakeDebris = field.intakeDebris;
     this.interactables = [...this.controlRoom.interactables, ...b.fieldMeshes];
+    // Merge everything static before the parts that grow, move or get raycast are added.
+    const batch = batchStatic(this.root, [this.water.mesh, this.intakeDebris, ...this.interactables]);
     this.expansion = new Expansion(b);
     this.waypoint = new Waypoint(this.root);
     // Base (un-grouped) lit materials are only used by the plant, which runs on station power.
     this.alwaysLit = this.mats.litMaterials;
-    this.stats = { buildings: town.buildingCount, trees: country.trees, colliders: this.collision.count, towers: grid.towerCount };
+    this.stats = { buildings: town.buildingCount, trees: country.trees, colliders: this.collision.count, towers: grid.towerCount, batched: `${batch.before}→${batch.after} meshes` };
   }
 
   /** `steam` 0..1: how hard the cooling towers are working (drives the plumes). */

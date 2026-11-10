@@ -69,6 +69,25 @@ export class DayNight {
     scene.fog = this.fog;
   }
 
+  private baseFog = 0.0006;
+
+  /** Shrink the sky dome and thicken the haze to match a shorter camera far plane. */
+  setDrawDistance(d: number): void {
+    this.sky.scale.setScalar(d * 1.1);
+    this.stars.scale.setScalar((d * 0.85) / 1800);
+    this.baseFog = Math.max(0.0006, 1.5 / d);
+  }
+
+  setShadowQuality(enabled: boolean, mapSize: number): void {
+    const s = this.sun.shadow;
+    this.sun.castShadow = enabled;
+    if (s.mapSize.x !== mapSize) {
+      s.mapSize.set(mapSize, mapSize);
+      s.map?.dispose();
+      s.map = null;
+    }
+  }
+
   /** Cloud cover 0..1 and a lightning flash 0..1, set each frame before update(). */
   cloud = 0;
   flash = 0;
@@ -107,7 +126,7 @@ export class DayNight {
     // Overcast: greyer, thicker haze.
     this.tmp.lerp(FOG_STORM, overcast * 0.7 * Math.max(0.25, this.daylight));
     this.fog.color.copy(this.tmp);
-    this.fog.density = 0.0006 + 0.0011 * overcast;
+    this.fog.density = this.baseFog + 0.0011 * overcast;
 
     (this.stars.material as THREE.PointsMaterial).opacity = this.night * 0.9 * (1 - overcast);
   }

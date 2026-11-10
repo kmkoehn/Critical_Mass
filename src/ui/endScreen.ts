@@ -25,7 +25,8 @@ export class EndScreen {
     this.root.addEventListener('mousedown', (e) => e.stopPropagation());
   }
 
-  show(kind: 'win' | 'lose', title: string, body: string, stats: ReportStats, onContinue?: () => void): void {
+  show(kind: 'win' | 'lose', title: string, body: string, stats: ReportStats,
+    opts: { onContinue?: () => void; onLoad?: { label: string; run: () => void } } = {}): void {
     this.isOpen = true;
     this.root.hidden = false;
     this.root.dataset.kind = kind;
@@ -56,13 +57,20 @@ export class EndScreen {
       h('span', '', row, a.text);
     }
     const row = h('div', 'cp-btnrow end-buttons', c);
+    const { onContinue, onLoad } = opts;
     if (onContinue) {
       button(row, 'Keep playing (sandbox)', () => {
         this.hide();
         onContinue();
       }, 'hire');
     }
-    button(row, 'Start a new game', () => location.reload(), kind === 'win' ? '' : 'danger');
+    if (onLoad) {
+      button(row, onLoad.label, () => {
+        this.hide();
+        onLoad.run();
+      }, 'hire');
+    }
+    button(row, 'Back to the title screen', () => location.reload(), kind === 'win' ? '' : 'danger');
   }
 
   hide(): void {

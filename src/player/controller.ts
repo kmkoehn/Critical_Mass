@@ -46,6 +46,7 @@ export class PlayerController {
   swimming = false;
   noclip = false;
   sensitivity = PLAYER.sensitivity;
+  invertY = false;
   private height = PLAYER.standHeight;
   private eye = PLAYER.standHeight - PLAYER.eyeBelowTop;
 
@@ -72,7 +73,7 @@ export class PlayerController {
 
   update(dt: number, inp: ControlInput): void {
     this.yaw -= inp.lookDX * this.sensitivity;
-    this.pitch = clamp(this.pitch - inp.lookDY * this.sensitivity, -1.5, 1.5);
+    this.pitch = clamp(this.pitch - inp.lookDY * this.sensitivity * (this.invertY ? -1 : 1), -1.5, 1.5);
 
     const sin = Math.sin(this.yaw);
     const cos = Math.cos(this.yaw);
