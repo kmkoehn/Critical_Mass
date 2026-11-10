@@ -14,10 +14,12 @@ export interface Settings {
   volume: number;
   /** Autosave every few game hours. */
   autosave: boolean;
+  /** Lower the render resolution automatically when the frame rate drops. */
+  adaptiveResolution: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  sensitivity: 1, invertY: false, dayMinutes: 20, quality: 'medium', volume: 0.8, autosave: true,
+  sensitivity: 1, invertY: false, dayMinutes: 20, quality: 'medium', volume: 0.8, autosave: true, adaptiveResolution: true,
 };
 
 export const DAY_LENGTHS = [10, 20, 40, 60] as const;
@@ -51,6 +53,7 @@ export function sanitize(s: Settings): Settings {
     quality: (['low', 'medium', 'high'] as const).includes(s.quality) ? s.quality : 'medium',
     volume: Math.min(1, Math.max(0, num(s.volume, 0.8))),
     autosave: s.autosave !== false,
+    adaptiveResolution: s.adaptiveResolution !== false,
   };
 }
 

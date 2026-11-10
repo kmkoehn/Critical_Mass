@@ -44,6 +44,7 @@ import { reactorDebugText } from './ui/reactorDebug';
 import { PanelManager } from './ui/panels/panelManager';
 import { SoundFx, type AlarmLevel } from './ui/audio';
 import { Menu } from './ui/menu';
+import { ResolutionGovernor, SOFTWARE_WARNING, describeGpu, type GpuInfo } from './ui/gpu';
 import { QUALITY, loadSettings, saveSettings, type Settings } from './ui/settings';
 import { SaveStore, browserStore, SAVE_VERSION, type SaveData, type SlotId } from './save/save';
 import { PLAYER } from './player/controller';
@@ -142,6 +143,8 @@ class Game {
   private readonly saves = new SaveStore(this.store);
   private settings: Settings = loadSettings(this.store);
   private menu!: Menu;
+  private readonly gpu: GpuInfo;
+  private readonly governor = new ResolutionGovernor();
   private nextAutosave = 0;
 
   private mode: Mode = 'paused';
@@ -179,6 +182,8 @@ class Game {
     this.renderer.toneMappingExposure = 0.62;
     this.renderer.domElement.className = 'game';
     app.appendChild(this.renderer.domElement);
+    this.gpu = describeGpu(this.renderer.getContext());
+    console.info(`[gpu] ${this.gpu.raw}${this.gpu.software ? '  (software rendering!)' : ''}`);
 
     this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 4500);
     this.camera.rotation.order = 'YXZ';
@@ -192,7 +197,9 @@ class Game {
       save: () => this.saveGame('manual'),
       quitToTitle: () => this.quitToTitle(),
       settingsChanged: (st) => this.applySettings(st),
+      perfInfo: () => this.perfInfo(),
     }, this.saves, { ...this.settings });
+    if (this.gpu.software) this.menu.setNotice(SOFTWARE_WARNING);
     this.input.onLockChange = (locked) => this.onLockChange(locked);
     this.renderer.domElement.addEventListener('mousedown', () => {
       if (this.mode === 'play' && !this.input.locked && !this.noLock) this.input.requestLock();
@@ -527,7 +534,8 @@ class Game {
     this.clock.scale = 86400 / (st.dayMinutes * 60);
     this.sound.setVolume(st.volume);
     const q = QUALITY[st.quality];
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatio));
+    if (!st.adaptiveResolution || prevQuality !== st.quality) this.governor.reset();
+    this.updatePixelRatio();
     this.camera.far = q.drawDistance;
     this.camera.updateProjectionMatrix();
     this.dayNight.setDrawDistance(q.drawDistance);
@@ -541,6 +549,20 @@ class Game {
         else if (m) m.needsUpdate = true;
       });
     }
+  }
+
+  /** Quality level's pixel ratio, scaled down by the resolution governor when frames run slow. */
+  private updatePixelRatio(): void {
+    const q = QUALITY[this.settings.quality];
+    const scale = this.settings.adaptiveResolution ? this.governor.scale : 1;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatio) * scale);
+  }
+
+  private perfInfo(): string {
+    const c = this.renderer.domElement;
+    const scale = this.settings.adaptiveResolution ? this.governor.scale : 1;
+    return `Graphics: ${this.gpu.name}${this.gpu.software ? ' (software!)' : ''} · ${Math.round(this.fps)} fps · ` +
+      `${c.width}×${c.height}${scale < 0.99 ? ` (${Math.round(scale * 100)}% resolution)` : ''}`;
   }
 
   private snapshot(): SaveData {
@@ -760,8 +782,13 @@ class Game {
 
   private frame(now: number): void {
     const t0 = performance.now();
-    const dt = Math.min(0.1, (now - this.last) / 1000);
+    const rawDt = (now - this.last) / 1000;
+    const dt = Math.min(0.1, rawDt);
     this.last = now;
+    // Dynamic resolution, judged only while the game is visibly running.
+    if (this.settings.adaptiveResolution && this.mode === 'play' && !document.hidden && document.hasFocus()) {
+      if (this.governor.frame(Math.min(rawDt, 0.25)) !== null) this.updatePixelRatio();
+    }
     this.realTime += dt;
     const inp = this.input;
     const running = this.mode !== 'paused' && this.mode !== 'over' && this.resting <= 0;
@@ -1259,6 +1286,8 @@ class Game {
         });
         return { types, top: Object.entries(byParent).sort((a, b) => b[1] - a[1]).slice(0, 15) };
       },
+      /** Renderer internals, for profiling from the console. */
+      gfx: () => ({ renderer: g.renderer, scene: g.scene, camera: g.camera }),
       save: (slot: SlotId = 'manual') => g.saveGame(slot),
       load: (slot: SlotId = 'manual') => g.loadGame(slot),
       saves: () => g.saves.list(),
@@ -1293,6 +1322,10 @@ class Game {
         draws: g.renderer.info.render.calls,
         triangles: g.renderer.info.render.triangles,
         cpuMs: +g.cpuMs.toFixed(2),
+        gpu: g.gpu.name,
+        software: g.gpu.software,
+        renderScale: +g.governor.scale.toFixed(2),
+        buffer: `${g.renderer.domElement.width}x${g.renderer.domElement.height}`,
       }),
     };
   }

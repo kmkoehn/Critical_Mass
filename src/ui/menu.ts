@@ -12,6 +12,8 @@ export interface MenuHandlers {
   save(): string | null;
   quitToTitle(): void;
   settingsChanged(s: Settings): void;
+  /** One line about what's drawing the game and how fast, for the settings screen. */
+  perfInfo(): string;
 }
 
 type Screen = 'title' | 'pause' | 'load' | 'settings';
@@ -48,6 +50,8 @@ export class Menu {
   private base: 'title' | 'pause' = 'title';
   private loading = true;
   private note = '';
+  /** A warning shown on the title and pause screens (e.g. software rendering). */
+  private notice: string | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -87,6 +91,11 @@ export class Menu {
     this.overlay.hidden = true;
   }
 
+  setNotice(text: string | null): void {
+    this.notice = text;
+    this.render();
+  }
+
   private go(s: Screen): void {
     this.screen = s;
     this.render();
@@ -121,6 +130,9 @@ export class Menu {
   private render(): void {
     this.card.replaceChildren();
     this.card.dataset.screen = this.screen;
+    if (this.notice && (this.screen === 'title' || this.screen === 'pause' || this.screen === 'settings')) {
+      el('div', 'ov-warning', this.card, this.notice);
+    }
     if (this.screen === 'title') this.renderTitle();
     else if (this.screen === 'pause') this.renderPause();
     else if (this.screen === 'load') this.renderLoad();
@@ -267,6 +279,21 @@ export class Menu {
       s.autosave = autoIn.checked;
       changed();
     });
+
+    const adapt = row('Adaptive resolution', 'Renders fewer pixels when the frame rate drops');
+    const adaptIn = el('input', '', adapt);
+    adaptIn.type = 'checkbox';
+    adaptIn.checked = s.adaptiveResolution;
+    adaptIn.addEventListener('change', () => {
+      s.adaptiveResolution = adaptIn.checked;
+      changed();
+    });
+
+    const perf = el('div', 'ov-perf', this.card, this.h.perfInfo());
+    const timer = setInterval(() => {
+      if (!perf.isConnected) clearInterval(timer);
+      else perf.textContent = this.h.perfInfo();
+    }, 1000);
 
     const col = el('div', 'ov-buttons', this.card);
     this.button(col, 'Back', () => this.go(this.base), { primary: true });
