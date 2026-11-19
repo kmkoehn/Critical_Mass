@@ -414,8 +414,10 @@ class Game {
     this.unit2.step(t, dtGame, this.grid.state.demandMW, this.reactor.state.generatorSynced);
     this.autopilot.otherSupplyMW = this.unit2.state.outputMW;
     for (const e of this.staff.step(t, dtGame, new Set(this.faults.state.faults.map((f) => f.id)))) this.event('info', e);
-    // The shift operator stands back while you're working the reactor or turbine panels.
-    const youHaveControls = this.mode === 'panel' && ['reactor', 'primary', 'turbine'].includes(this.panels.current ?? '');
+    // The shift operator stands back whenever you're in the control room (as the HUD says, you have the
+    // controls there): checking the annunciator or the grid board mustn't hand the plant back.
+    const youHaveControls = this.insideControlRoom
+      || (this.mode === 'panel' && ['reactor', 'primary', 'turbine'].includes(this.panels.current ?? ''));
     const hotPumps = this.faults.state.faults.filter((f) => f.kind === 'rcpBearing').map((f) => Number(f.target));
     this.apReport = this.autopilot.step(SIM_DT, this.reactor, this.grid, this.staff.state, this.staff.dutyOperator, youHaveControls, hotPumps);
     for (const e of this.apReport.events) this.event('warn', e);

@@ -119,6 +119,32 @@ describe('shift-operator autopilot', () => {
     expect(p.autopilot.snapshot().stoppedForCrew).toEqual([]);
   });
 
+  it('backs off when the grid cannot take the output, whatever the setpoint', () => {
+    const p = plant('fullPower', 13);
+    p.hireBest('operator');
+    p.step();
+    p.staff.state.autopilot.mode = 'hold';
+    p.staff.state.autopilot.setpointMW = 1000;
+    p.reactor.state.governorValve = 1;
+    // Storm damage leaves the grid long on power: frequency up at 61 Hz.
+    p.grid.state.frequency = 61;
+    // A fresh operator acts on the first step (the plant's one has just moved the valve).
+    new Autopilot().step(DT, p.reactor, p.grid, p.staff.state, p.staff.dutyOperator, false, []);
+    expect(p.reactor.state.governorValve).toBeLessThan(1);
+  });
+
+  it('holds at least the setpoint but covers demand above it', () => {
+    const p = plant('fullPower', 13);
+    p.hireBest('operator');
+    p.step();
+    p.staff.state.autopilot.mode = 'hold';
+    p.staff.state.autopilot.setpointMW = 100;
+    p.reactor.state.governorValve = 0.3;
+    Object.assign(p.grid.state, { dead: false, frequency: 59.8, demandMW: p.reactor.state.electricalOutputMW + 200 });
+    new Autopilot().step(DT, p.reactor, p.grid, p.staff.state, p.staff.dutyOperator, false, []);
+    expect(p.reactor.state.governorValve).toBeGreaterThan(0.3);
+  });
+
   it('stands back while the player has the controls', () => {
     const p = plant('fullPower', 13);
     p.hireBest('operator');

@@ -131,8 +131,14 @@ export class Autopilot {
     this.valveTimer -= dt;
     if (this.valveTimer <= 0) {
       this.valveTimer = interval;
-      let target = ap.mode === 'follow' ? Math.max(150, grid.state.demandMW - this.otherSupplyMW) : ap.setpointMW;
+      // Hold runs at least the setpoint (the surplus goes to exports) but never leaves the town short.
+      const need = grid.state.demandMW - this.otherSupplyMW;
+      let target = ap.mode === 'follow' ? Math.max(150, need) : Math.max(ap.setpointMW, need);
       if (cap !== null) target = Math.min(target, cap);
+      // High frequency means the grid can't take what the plant is making (lines down, demand
+      // falling): back off before over-frequency protection opens the breaker, whatever the orders.
+      const hz = grid.state.frequency;
+      if (!grid.state.dead && hz > 60.2) target = Math.min(target, s.electricalOutputMW - (hz - 60) * 400);
       let err = target - s.electricalOutputMW;
       // Steam generators starving: back off.
       if (s.steamGeneratorLevel < 30) err = Math.min(err, -50);
