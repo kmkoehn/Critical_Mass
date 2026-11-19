@@ -107,6 +107,18 @@ describe('shift-operator autopilot', () => {
     expect(p.reactor.state.coolantPumps[1].on).toBe(true);
   });
 
+  it('stops derating when the player restarts the pump it stopped for the crew', () => {
+    const p = plant('fullPower', 13);
+    p.hireBest('operator');
+    p.step();
+    // The operator remembers stopping RCP 1, but it's running again (the player restarted it).
+    p.autopilot.restore({ ...p.autopilot.snapshot(), derating: true, stoppedForCrew: [0] });
+    expect(p.reactor.state.coolantPumps[0].on).toBe(true);
+    const report = p.autopilot.step(DT, p.reactor, p.grid, p.staff.state, p.staff.dutyOperator, false, []);
+    expect(report.reason).toMatch(/has the controls$/);
+    expect(p.autopilot.snapshot().stoppedForCrew).toEqual([]);
+  });
+
   it('stands back while the player has the controls', () => {
     const p = plant('fullPower', 13);
     p.hireBest('operator');

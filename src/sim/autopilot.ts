@@ -56,9 +56,15 @@ export class Autopilot {
    */
   private bearingDrill(reactor: Reactor, op: StaffMember, hotPumps: readonly number[], events: string[]): number | null {
     const s = reactor.state;
-    // Restart repaired pumps that are still off.
+    // Restart repaired pumps that are still off. A pump someone else has already restarted
+    // (the player, from the primary panel) is back in service: stop derating for it.
     s.coolantPumps.forEach((p, i) => {
-      if (!p.on && !p.failed && !hotPumps.includes(i) && this.stoppedForCrew.has(i)) {
+      if (!this.stoppedForCrew.has(i) || hotPumps.includes(i)) return;
+      if (p.on) {
+        this.stoppedForCrew.delete(i);
+        return;
+      }
+      if (!p.failed) {
         this.stoppedForCrew.delete(i);
         reactor.setCoolantPump(i, true);
         events.push(`${op.name} restarted RCP ${i + 1} after the repair`);
